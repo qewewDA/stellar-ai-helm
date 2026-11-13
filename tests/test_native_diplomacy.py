@@ -41,7 +41,9 @@ const base = new Pointer(B);
 const destroyed = [];
 // Action vtable for close borders with the reviewed sender/receiver setters.
 const CLOSE = B + 0x23aebc8, OPEN = B + 0x23aed70, PROPOSE = B + 0x23b4138;
-[CLOSE, OPEN].forEach(vt => { put(vt + 0xa8, B + 0x940120); put(vt + 0xb0, B + 0x940140); });
+const VTABLES = {0x3695: CLOSE, 0x3696: OPEN, 0x3385: B + 0x23ae878, 0x3384: B + 0x23ae6d0,
+    0x3524: B + 0x23aea20, 0x3525: B + 0x23aef18};
+Object.values(VTABLES).forEach(vt => { put(vt + 0xa8, B + 0x940120); put(vt + 0xb0, B + 0x940140); });
 function NativeFunction(address) {
     const rva = address.value - B;
     return (...values) => {
@@ -49,7 +51,7 @@ function NativeFunction(address) {
         if (rva === 0x9a9860) {
             const token = values[0];
             if (scenario === 'action_fail') return new Pointer(0);
-            put(0x90000, scenario === 'bad_action' ? 0 : token === 0x3695 ? CLOSE : OPEN);
+            put(0x90000, scenario === 'bad_action' ? 0 : VTABLES[token]);
             put(0x90000 + 0x20, 0xffffffff); put(0x90000 + 0x24, 0xffffffff);
             put(0x90000 + 0x40, scenario === 'no_type' ? 0 : 0x95000);
             return new Pointer(0x90000);
@@ -75,14 +77,18 @@ country(9, 0x29000, 0x0100000a);
 put(0x11000 + 7 * 0x10 + 8, 0);
 put(0x70000 + 0x5c, scenario === 'other_human' ? 4 : 0);
 const token = 'a'.repeat(32);
-const request = {kind: scenario === 'open' ? 'open_borders' : 'close_borders', country_id: '0', token,
-    target_country_id: '8'};
+const kinds = {open: 'open_borders', insult: 'insult', rival: 'make_rival', end_rival: 'end_rivalry',
+    recall: 'recall_embassy'};
+const request = {kind: kinds[scenario] || 'close_borders', country_id: '0', token,
+    target_country_id: '16777224'};
+if (scenario === 'index_only') request.target_country_id = '8';
 if (scenario === 'self') request.target_country_id = '0';
 if (scenario === 'missing') request.target_country_id = '7';
 if (scenario === 'mismatch') request.target_country_id = '9';
 if (scenario === 'outside') request.target_country_id = '40';
 if (scenario === 'extra') request.queue_id = '1';
 if (scenario === 'kind') request.kind = 'declare_war';
+if (scenario === 'embassy_kind') request.kind = 'embassy';
 class NativePreconditionError extends Error {}
 const context = {
     base, request, NativeFunction, NativePreconditionError, ptr: value => new Pointer(value),
@@ -114,7 +120,10 @@ def _run(scenario):
 pytestmark = pytest.mark.skipif(NODE is None, reason="Native JavaScript adapter checks require Node.js")
 
 
-@pytest.mark.parametrize("scenario,token,vtable", [("ok", 0x3695, 0x23aebc8), ("open", 0x3696, 0x23aed70)])
+@pytest.mark.parametrize("scenario,token,vtable", [
+    ("ok", 0x3695, 0x23aebc8), ("open", 0x3696, 0x23aed70), ("insult", 0x3385, 0x23ae878),
+    ("rival", 0x3384, 0x23ae6d0), ("end_rival", 0x3524, 0x23aea20), ("recall", 0x3525, 0x23aef18),
+])
 def test_proposal_owns_one_action_with_player_sender_and_exact_receiver(scenario, token, vtable):
     result = _run(scenario)
     assert result["accepted"] is True and result["validation"] == {"allowed": True, "reason": ""}
@@ -126,13 +135,13 @@ def test_proposal_owns_one_action_with_player_sender_and_exact_receiver(scenario
     assert result["destroyed"] == []
 
 
-@pytest.mark.parametrize("scenario", ["self", "missing", "mismatch", "outside", "other_human"])
+@pytest.mark.parametrize("scenario", ["self", "missing", "mismatch", "outside", "other_human", "index_only"])
 def test_country_checks_run_before_any_allocation(scenario):
     result = _run(scenario)
     assert result["accepted"] is False and 0x9a9860 not in result["calls"]
 
 
-@pytest.mark.parametrize("scenario", ["extra", "kind"])
+@pytest.mark.parametrize("scenario", ["extra", "kind", "embassy_kind"])
 def test_malformed_requests_never_read_game_memory(scenario):
     result = _run(scenario)
     assert result["accepted"] is False and result["calls"] == []

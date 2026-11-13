@@ -23,7 +23,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field, StrictBool, StrictInt
 
 from .direct import (
-    TEST_EVENT_ACTION, TEST_EVENT_ID, DirectConfig, atomic_publish, disarm_inbox, load_direct_config,
+    TEST_CONTACT_ACTION, TEST_EVENT_ACTION, TEST_EVENT_ID, DirectConfig, atomic_publish, disarm_inbox, load_direct_config,
     publish_observation, publish_order, publish_pause_verification,
 )
 from .direct_observe import DirectObserver
@@ -85,6 +85,25 @@ def _test_event_fired(before: dict, after: dict) -> bool:
     added = [value for key, value in new_ours.items() if key not in old_ours]
     return (all(new_ours.get(key) == value for key, value in old_ours.items())
             and len(added) == 1 and added[0].get("event_id") == TEST_EVENT_ID)
+
+
+def _test_contact_established(before: dict, after: dict) -> bool:
+    """Exactly one AI regular empire gained communications with us on the same day; nothing else of ours moved."""
+    if before.get("date") != after.get("date") or after.get("country_id") != "0":
+        return False
+    old, new = before.get("diplomacy"), after.get("diplomacy")
+    if not (isinstance(old, dict) and isinstance(new, dict) and old.get("known") is True and new.get("known") is True):
+        return False
+    first, second = old["by_country"], new["by_country"]
+    if any(key not in second for key in first):
+        return False
+    changed = [key for key, value in second.items() if first.get(key) != value]
+    if len(changed) != 1:
+        return False
+    target, previous = second[changed[0]], first.get(changed[0])
+    return (target.get("country_type") == "default" and target.get("contact") is True
+            and target.get("communications") is True
+            and (previous is None or previous.get("communications") is False))
 
 
 def _native_matches(result: dict | None, token: str, kind: str, payload: dict | None = None) -> bool:
@@ -359,7 +378,7 @@ class DirectConnection:
             if not supported:
                 return {"status": "blocked", "reason": "This build permits observation, pause and checkpoints; "
                         "gameplay actions need separate live verification"}
-        if order is None and selection is None and action_id not in {"probe_connection", "hold_military_fleets", TEST_EVENT_ACTION}:
+        if order is None and selection is None and action_id not in {"probe_connection", "hold_military_fleets", TEST_EVENT_ACTION, TEST_CONTACT_ACTION}:
             return {"status": "blocked", "reason": "Unknown fixed direct action"}
         config = _configuration(self.config_path)
         guard = getattr(self._plan_local, "guard", None)
@@ -507,7 +526,7 @@ class DirectConnection:
                         if order is not None:
                             validate_order(after.state, order)
                         target_set_matches = (selection is not None or order is not None
-                                              or action_id in {"probe_connection", TEST_EVENT_ACTION}
+                                              or action_id in {"probe_connection", TEST_EVENT_ACTION, TEST_CONTACT_ACTION}
                                               or set(self._hold_targets(after.state)) == set(targets))
                         postconditions = (verify_extended(before.state, after.state, selection)
                                           if isinstance(selection, RESOLVED_TYPES)
@@ -528,6 +547,8 @@ class DirectConnection:
                                           else verify_order(after.state, order) if order is not None
                                           else _test_event_fired(before.state, after.state)
                                           if action_id == TEST_EVENT_ACTION
+                                          else _test_contact_established(before.state, after.state)
+                                          if action_id == TEST_CONTACT_ACTION
                                           else action_id == "probe_connection" or self._orders_verified(after.state, targets))
                         receipt = ((native_matches and native_status.get("status") == "submitted")
                                    if selection is not None else f"qs_direct_done_{token}" in flags)
@@ -572,6 +593,8 @@ class DirectConnection:
                                              else "Fresh state shows exactly one new open player event "
                                              + TEST_EVENT_ID + "; no option was chosen."
                                              if action_id == TEST_EVENT_ACTION
+                                             else "Fresh state shows exactly one AI regular empire newly in communication with us; nothing else of ours changed."
+                                             if action_id == TEST_CONTACT_ACTION
                                              else "Fresh state confirms military fleet wait orders (up to 30 days).")}
                         if self.native_bridge is not None and dump_token is None and (
                                 selection is None or (native_matches and native_status.get("status") == "submitted")):
@@ -1073,7 +1096,8 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         if not isinstance(diplomacy, dict) or diplomacy.get("known") is not True:
             return {"status": "blocked", "reason": "Diplomatic relations are not exactly observable in this snapshot"}
         return {"status": "observed", "snapshot": observed.get("snapshot"), "date": state.get("date"),
-                "relations": [{key: value for key, value in relation.items() if key != "relation"}
+                "relations": [{**{key: value for key, value in relation.items() if key not in {"relation", "their_side"}},
+                               "their_opinion_modifiers": (relation.get("their_side") or {}).get("modifiers")}
                               for _, relation in sorted(diplomacy["by_country"].items(), key=lambda item: int(item[0]))]}
 
     @server.tool(annotations=writing)
@@ -1094,6 +1118,44 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         """
         return await call_write(connection.diplomacy_command, "open_borders", target_country_id=target_country_id)
 
+    @server.tool(annotations=writing)
+    async def insult(target_country_id: str) -> dict:
+        """Insult one contacted country through the normal diplomatic proposal command.
+
+        Unilateral (auto-accepted). The game requires a poor or worse opinion of them
+        (or war, hostility, a fallen empire). Verified when the target's opinion of us
+        gains opinion_insult on the same paused day and nothing else of ours changed.
+        """
+        return await call_write(connection.diplomacy_command, "insult", target_country_id=target_country_id)
+
+    @server.tool(annotations=writing)
+    async def make_rival(target_country_id: str) -> dict:
+        """Declare one contacted country our rival through the normal proposal command.
+
+        Unilateral (auto-accepted); the game's validator decides. Verified when our
+        relation gains is_rival on the same paused day and nothing else of ours changed.
+        """
+        return await call_write(connection.diplomacy_command, "make_rival", target_country_id=target_country_id)
+
+    @server.tool(annotations=writing)
+    async def end_rivalry(target_country_id: str) -> dict:
+        """End our rivalry with one country through the normal proposal command.
+
+        Unilateral (auto-accepted). Verified when our relation loses is_rival on the
+        same paused day and nothing else of ours changed.
+        """
+        return await call_write(connection.diplomacy_command, "end_rivalry", target_country_id=target_country_id)
+
+    @server.tool(annotations=writing)
+    async def recall_embassy(target_country_id: str) -> dict:
+        """Recall our embassy from one country through the normal proposal command.
+
+        Unilateral (auto-accepted). Establishing an embassy needs the recipient's
+        acceptance and is not offered. Verified when our relation loses embassy on
+        the same paused day and nothing else of ours changed.
+        """
+        return await call_write(connection.diplomacy_command, "recall_embassy", target_country_id=target_country_id)
+
     @server.tool(annotations=readonly)
     def list_actions() -> list[dict]:
         """Read the locally authorized direct actions and their effects."""
@@ -1103,6 +1165,8 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
             "hold_military_fleets": "Clear orders of mobile military fleets outside combat; wait for 30 game days",
             TEST_EVENT_ACTION: "Test save only (launcher flag): fire the fixed vanilla player event "
                                + TEST_EVENT_ID + "; verify it opens; never chooses an option",
+            TEST_CONTACT_ACTION: "Test save only (launcher flag): establish communications with one AI regular "
+                                 "empire we have none with (vanilla establish_communications_no_message)",
         }
         orders = {
             "fleet_wait": "Replace one observed fleet's orders with an exact 1–365 game-day wait",
@@ -1134,7 +1198,11 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "queue_defense_platform": "Queue one defense platform at an owned starbase with normal payment",
                                     "choose_event_option": "Choose one option of one open event popup through the normal command",
                                     "close_borders": "Close our borders to one contacted country (unilateral diplomatic action)",
-                                    "open_borders": "Reopen our borders to one country (unilateral diplomatic action)"}[action]}
+                                    "open_borders": "Reopen our borders to one country (unilateral diplomatic action)",
+                                    "insult": "Insult one contacted country (unilateral diplomatic action)",
+                                    "make_rival": "Declare one contacted country our rival (unilateral diplomatic action)",
+                                    "end_rivalry": "End our rivalry with one country (unilateral diplomatic action)",
+                                    "recall_embassy": "Recall our embassy from one country (unilateral diplomatic action)"}[action]}
                    for action in config.allowed_native_actions])
 
     @server.tool(annotations=readonly)

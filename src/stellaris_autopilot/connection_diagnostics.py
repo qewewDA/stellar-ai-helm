@@ -19,7 +19,7 @@ _ACTION_KINDS = frozenset({
     "demolish_building", "convert_zone", "cancel_construction", "survey_planet", "build_station",
     "colonize_planet", "fleet_move", "fleet_wait", "fleet_orbit", "fleet_stop", "set_policy",
     "activate_edict", "deactivate_edict", "set_fleet_stance", "move_queue_item", "queue_defense_platform",
-    "choose_event_option", "close_borders", "open_borders",
+    "choose_event_option", "close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
 })
 
 

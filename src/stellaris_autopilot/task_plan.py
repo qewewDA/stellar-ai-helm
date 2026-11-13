@@ -138,7 +138,7 @@ class EventOptionStep(_Step):
 
 
 class BordersStep(_Step):
-    kind: Literal["close_borders", "open_borders"]
+    kind: Literal["close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy"]
     target_country_id: StrictStr
 
 
@@ -173,7 +173,7 @@ def dispatch_step(connection, step: dict):
         return connection.control_command(kind, **args)
     if kind == "choose_event_option":
         return connection.event_command(kind, **args)
-    if kind in {"close_borders", "open_borders"}:
+    if kind in {"close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy"}:
         return connection.diplomacy_command(kind, **args)
     if kind.startswith("fleet_"):
         return connection.issue_order(step)

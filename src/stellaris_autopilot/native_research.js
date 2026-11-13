@@ -337,7 +337,7 @@ function consumePending(source = 'run') {
                     : ['set_fleet_stance', 'move_queue_item', 'queue_defense_platform'].includes(request.kind)
                     ? prepareControlCommand(request)
                     : request.kind === 'choose_event_option' ? prepareEventCommand(request)
-                    : ['close_borders', 'open_borders'].includes(request.kind) ? prepareDiplomacyCommand(request)
+                    : ['close_borders', 'open_borders', 'insult', 'make_rival', 'end_rivalry', 'recall_embassy'].includes(request.kind) ? prepareDiplomacyCommand(request)
                     : ['upgrade_building', 'demolish_building', 'convert_zone', 'cancel_construction'].includes(request.kind)
                     ? preparePlanetCommand(request) : prepareFleetCommand(request);
                 command = prepared.command;

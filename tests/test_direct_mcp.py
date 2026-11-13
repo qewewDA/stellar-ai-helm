@@ -100,7 +100,7 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "set_policy", "activate_edict", "deactivate_edict",
                           "set_fleet_stance", "move_queue_item", "queue_defense_platform",
                           "list_pending_events", "choose_event_option",
-                          "list_diplomacy", "close_borders", "open_borders",
+                          "list_diplomacy", "close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}
     assert tools["observe_empire"].annotations.readOnlyHint is True
@@ -129,6 +129,10 @@ EXTENDED_ARGUMENTS = [
     ("colonize_planet", {"fleet_id": "3", "planet_id": "105"}),
     ("close_borders", {"target_country_id": "73"}),
     ("open_borders", {"target_country_id": "73"}),
+    ("insult", {"target_country_id": "16777222"}),
+    ("make_rival", {"target_country_id": "16777222"}),
+    ("end_rivalry", {"target_country_id": "16777222"}),
+    ("recall_embassy", {"target_country_id": "16777222"}),
 ]
 
 
@@ -883,3 +887,26 @@ def test_border_tools_pass_typed_payloads_and_list_diplomacy_never_publishes(con
                                 ("open_borders", {"target_country_id": "73"})]
     unknown = _DiplomacyConnection({"date": "2209.02.06", "diplomacy": {"known": False}})
     assert invoke(direct.build_direct_server(config_path, connection=unknown), "list_diplomacy")["status"] == "blocked"
+
+
+def _relations(**relations):
+    return {"date": "2209.08.06", "country_id": "0", "diplomacy": {"known": True, "by_country": {
+        key: {"country": key, "country_type": kind, "contact": True, "communications": comms, "hostile": False,
+              "closed_borders": False, "relation": [["country", key]]}
+        for key, (kind, comms) in relations.items()}}}
+
+
+def test_test_contact_verification_needs_exactly_one_new_regular_empire_in_communication():
+    before = _relations(**{"8": ("voidworms", False)})
+    assert direct._test_contact_established(before, _relations(**{"8": ("voidworms", False), "5": ("default", True)}))
+    assert direct._test_contact_established(_relations(**{"8": ("voidworms", False), "5": ("default", False)}),
+                                            _relations(**{"8": ("voidworms", False), "5": ("default", True)}))
+    assert not direct._test_contact_established(before, before)
+    assert not direct._test_contact_established(before, _relations(**{"8": ("voidworms", True)}))
+    assert not direct._test_contact_established(before, _relations(**{"8": ("voidworms", False), "5": ("default", False)}))
+    assert not direct._test_contact_established(before, _relations(**{"5": ("default", True)}))
+    assert not direct._test_contact_established(before, _relations(**{"8": ("voidworms", False), "5": ("default", True),
+                                                                     "6": ("default", True)}))
+    later = {**_relations(**{"8": ("voidworms", False), "5": ("default", True)}), "date": "2209.08.07"}
+    assert not direct._test_contact_established(before, later)
+    assert not direct._test_contact_established({"date": "x"}, {"date": "x", "country_id": "0"})

@@ -40,14 +40,20 @@ HOLD_ACTION = "hold_military_fleets"
 # and paused effects can be proved. Enabled only by an explicit launcher flag.
 TEST_EVENT_ACTION = "fire_test_event"
 TEST_EVENT_ID = "grand_archive.2400"
-_ACTIONS = frozenset({PROBE_ACTION, HOLD_ACTION, TEST_EVENT_ACTION})
+# Test save only, behind the same launcher flag: give the player communications
+# with one AI regular empire it has none with, using the vanilla effect the
+# game's own scripts use (e.g. 00_scripted_effects.txt).
+TEST_CONTACT_ACTION = "establish_test_contact"
+TEST_ACTIONS = (TEST_EVENT_ACTION, TEST_CONTACT_ACTION)
+_ACTIONS = frozenset({PROBE_ACTION, HOLD_ACTION, *TEST_ACTIONS})
 ORDER_KINDS = frozenset({"fleet_wait", "fleet_orbit", "fleet_move", "fleet_stop"})
 NATIVE_ACTIONS = frozenset({"select_research", "queue_district", "queue_building", "set_paused", "queue_ship",
                             "upgrade_building", "demolish_building", "convert_zone", "cancel_construction",
                             "survey_planet", "build_station", "colonize_planet", "queue_colony_ship",
                             "set_policy", "activate_edict", "deactivate_edict",
                             "set_fleet_stance", "move_queue_item", "queue_defense_platform",
-                            "choose_event_option", "close_borders", "open_borders"})
+                            "choose_event_option", "close_borders", "open_borders",
+                            "insult", "make_rival", "end_rivalry", "recall_embassy"})
 _TOKEN = re.compile(r"[0-9a-f]{32}", re.ASCII)
 _COUNTRY = re.compile(r"[0-9]{1,10}", re.ASCII)
 
@@ -233,6 +239,9 @@ def render_action(config: DirectConfig, action_id: str, token: str) -> str:
         )
     elif action_id == TEST_EVENT_ACTION:
         orders = f"country_event = {{ id = {TEST_EVENT_ID} }} "
+    elif action_id == TEST_CONTACT_ACTION:
+        orders = ("random_playable_country = { limit = { is_country_type = default is_ai = yes "
+                  "NOT = { has_communications = prev } } establish_communications_no_message = prev } ")
     return (
         ownership_header(config)
         + "effect if = { limit = { is_ai = no is_ironman = no is_multiplayer = no "

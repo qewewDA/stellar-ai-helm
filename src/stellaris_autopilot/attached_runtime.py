@@ -12,7 +12,7 @@ from .attached_process import attach_game
 from .campaign import CampaignError, _atomic, package_dump
 from .connection_cancel import check_cancelled
 from .connection_diagnostics import ConnectionPreflightError, check_connection_preflight
-from .direct import (NATIVE_ACTIONS, ORDER_KINDS, OWNERSHIP_HEADER, TEST_EVENT_ACTION, DirectConfig,
+from .direct import (NATIVE_ACTIONS, ORDER_KINDS, OWNERSHIP_HEADER, TEST_ACTIONS, DirectConfig,
                      disarm_inbox, load_direct_config, ownership_header)
 from .direct_mcp import DirectConnection, _controller_lock, validate_connection
 from .direct_observe import DirectObserver, clear_observation_caches
@@ -191,7 +191,7 @@ class AttachedRuntime:
             user_dir=self.user_dir, state_dir=self.state_dir, country_id="0", campaign_id=meta["campaign_id"],
             verified_game_version=meta["game_version"], session_token=self.token,
             allowed_actions=("probe_connection",) + (
-                (TEST_EVENT_ACTION,) if self._test_events and not observation_only else ()),
+                TEST_ACTIONS if self._test_events and not observation_only else ()),
             allowed_orders=() if observation_only else
             tuple(sorted(ORDER_KINDS)) if self._extended else ("fleet_wait", "fleet_orbit"),
             allowed_native_actions=("set_paused",) if observation_only else

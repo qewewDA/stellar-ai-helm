@@ -1,4 +1,4 @@
-/* Pinned 4.5.2 unilateral diplomatic actions (close/open borders). Appended
+/* Pinned 4.5.2 unilateral diplomatic actions (auto-accepted proposals). Appended
  * after the other sources for the 4.5.2 build only; the 4.5.3 profile never
  * includes it. Callers never supply JavaScript, addresses or action tokens.
  *
@@ -14,8 +14,13 @@
  * again. Countries live in the database at [0x3114c38]: +0x18 entries
  * (stride 0x10, object at +8), +0x20 count, object+0x20 full handle.
  * Action tokens/vtables: action_close_borders 0x3695 / 0x23aebc8,
- * action_open_borders 0x3696 / 0x23aed70; both 0x50 bytes with type data
- * at +0x40. The game's validator stays authoritative and every result is
+ * action_open_borders 0x3696 / 0x23aed70, action_insult 0x3385 / 0x23ae878,
+ * action_make_rival 0x3384 / 0x23ae6d0, action_end_rivalry 0x3524 / 0x23aea20,
+ * action_recall_embassy 0x3525 / 0x23aef18; all 0x50 bytes with type data
+ * at +0x40 and the same base vtable slots (+0x58 0x942130, +0xa8/+0xb0
+ * setters). All are auto_accepted in 00_actions.txt; action_embassy is not
+ * (the recipient decides) and is deliberately absent. Save country ids are
+ * full handles (generation << 24 | index). The game's validator stays authoritative and every result is
  * verified from a fresh dump by diplomacy_commands.py.
  */
 'use strict';
@@ -30,6 +35,10 @@ const qsDiploProposeVtable = 0x23b4138;
 const qsDiploActions = {
     close_borders: {token: 0x3695, vtable: 0x23aebc8},
     open_borders: {token: 0x3696, vtable: 0x23aed70},
+    insult: {token: 0x3385, vtable: 0x23ae878},
+    make_rival: {token: 0x3384, vtable: 0x23ae6d0},
+    end_rivalry: {token: 0x3524, vtable: 0x23aea20},
+    recall_embassy: {token: 0x3525, vtable: 0x23aef18},
 };
 
 function canonicalDiplomacyRequest(request) {
@@ -37,14 +46,14 @@ function canonicalDiplomacyRequest(request) {
         !Object.prototype.hasOwnProperty.call(qsDiploActions, request.kind)) return null;
     if (Array.isArray(request) || Object.keys(request).sort().join(',') !== 'country_id,kind,target_country_id,token' ||
         request.country_id !== '0' || typeof request.token !== 'string' || !/^[0-9a-f]{32}$/.test(request.token) ||
-        !validId(request.target_country_id) || request.target_country_id === '0' ||
-        Number(request.target_country_id) > 0xffffff) {
+        !validId(request.target_country_id) || request.target_country_id === '0') {
         throw new Error('Malformed typed diplomacy request');
     }
     return {kind: request.kind, country_id: '0', target_country_id: request.target_country_id, token: request.token};
 }
 
-function qsCountryObject(index) {
+function qsCountryObject(id) {
+    const index = id % 0x1000000;
     const database = qsCountryDatabase.readPointer();
     if (database.isNull()) throw new NativePreconditionError('The country database is unavailable');
     const entries = database.add(0x18).readPointer();
@@ -54,7 +63,7 @@ function qsCountryObject(index) {
     const country = entries.add(index * 0x10 + 8).readPointer();
     if (country.isNull()) throw new NativePreconditionError('The country no longer exists');
     const handle = country.add(0x20).readU32();
-    if ((handle & 0xffffff) !== index) throw new NativePreconditionError('The country handle does not match its id');
+    if (handle !== id) throw new NativePreconditionError('The country handle does not match its id');
     return {country, handle};
 }
 

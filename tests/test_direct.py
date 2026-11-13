@@ -333,3 +333,19 @@ def test_test_event_action_requires_authorization_and_renders_only_the_fixed_eve
     assert dict(body.get("country_event").items()) == {"id": TEST_EVENT_ID}
     assert set(key for key, _ in body.items()) == {"limit", "country_event", "set_country_flag", "log"}
     assert script.count("country_event") == 1 and "option" not in script
+
+
+def test_test_contact_action_requires_authorization_and_renders_only_the_fixed_effect(config):
+    from stellaris_autopilot.direct import TEST_CONTACT_ACTION
+    with pytest.raises(ValueError, match="not locally authorized"):
+        atomic_publish(config, TOKEN, action_id=TEST_CONTACT_ACTION)
+    authorized = replace(config, allowed_actions=(TEST_CONTACT_ACTION,))
+    script = render_action(authorized, TEST_CONTACT_ACTION, TOKEN)
+    body = loads(script.splitlines()[1].removeprefix("effect ")).get("if")
+    assert body.get("limit").get("is_ai") == "no"
+    chosen = body.get("random_playable_country")
+    assert dict(chosen.get("limit").items()) == {"is_country_type": "default", "is_ai": "yes",
+                                                  "NOT": chosen.get("limit").get("NOT")}
+    assert chosen.get("establish_communications_no_message") == "prev"
+    assert set(key for key, _ in body.items()) == {"limit", "random_playable_country", "set_country_flag", "log"}
+    assert script.count("establish_communications") == 1 and "war" not in script
