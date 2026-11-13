@@ -527,7 +527,8 @@ rpc.exports = {
                 || (typeof canonicalCountryRequest === 'function' ? canonicalCountryRequest(request) : null)
                 || (typeof canonicalControlRequest === 'function' ? canonicalControlRequest(request) : null)
                 || (typeof canonicalEventRequest === 'function' ? canonicalEventRequest(request) : null)
-                || (typeof canonicalDiplomacyRequest === 'function' ? canonicalDiplomacyRequest(request) : null);
+                || (typeof canonicalDiplomacyRequest === 'function' ? canonicalDiplomacyRequest(request) : null)
+                || (typeof canonicalDecisionRequest === 'function' ? canonicalDecisionRequest(request) : null);
             if (canonical === null) throw new Error('Unknown native kind or malformed typed payload');
         }
         if (states.has(request.token)) {

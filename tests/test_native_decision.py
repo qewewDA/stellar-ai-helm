@@ -126,3 +126,21 @@ def test_unexpected_defaults_destroy_the_unsubmitted_command():
 def test_the_router_sends_the_kind_to_the_decision_adapter():
     router = (SOURCE.parent / "native_research.js").read_text(encoding="utf-8")
     assert "request.kind === 'enact_planet_decision' ? prepareDecisionCommand(request)" in router
+
+
+def test_enqueue_accepts_every_legacy_only_canonical_request():
+    # Live 2026-11-14: enqueue rejected enact_planet_decision before dispatch
+    # ("Unknown native kind or malformed typed payload") because its canonical
+    # function was missing from the enqueue chain.
+    import re
+
+    from stellaris_autopilot import native_builds
+    router = (SOURCE.parent / "native_research.js").read_text(encoding="utf-8")
+    chain = router[router.index("canonical = canonicalShipRequest(request)"):
+                   router.index("Unknown native kind or malformed typed payload")]
+    for name in native_builds.LEGACY_ONLY_SOURCES:
+        text = (SOURCE.parent / name).read_text(encoding="utf-8")
+        for function in re.findall(r"^function (canonical[A-Za-z]+Request)\(request\)", text, re.M):
+            if function in {"canonicalEnvoyRequest"}:
+                continue  # called by canonicalDiplomacyRequest
+            assert f"typeof {function} === 'function' ? {function}(request)" in chain, function
