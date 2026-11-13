@@ -100,6 +100,19 @@ def decision_definition(record: dict) -> DecisionDefinition:
         raise ValueError("Only decisions for our own planets are offered")
     resources = definition.get("resources")
     cost = resources.get("cost", {}) if isinstance(resources, dict) else {} if resources is None else None
+    if isinstance(cost, list):
+        # Tiered costs (e.g. decision_planet_luxuries_boost scales with pop_amount):
+        # keep each resource's smallest tier; verification then only requires
+        # those resources to fall and nothing else to change.
+        tiers = {}
+        for tier in cost:
+            amounts = {key: value for key, value in tier.items() if key != "trigger"} if isinstance(tier, dict) else None
+            if not amounts or not all(isinstance(key, str) and _KEY.fullmatch(key) and type(value) in (int, float)
+                                      and math.isfinite(value) and value > 0 for key, value in amounts.items()):
+                raise ValueError("The decision cost tiers are not fixed positive resource costs")
+            for key, value in amounts.items():
+                tiers[key] = min(tiers.get(key, value), value)
+        cost = tiers
     if not isinstance(cost, dict) or not all(
             isinstance(key, str) and _KEY.fullmatch(key) and type(value) in (int, float)
             and math.isfinite(value) and value > 0 for key, value in cost.items()):
@@ -246,12 +259,22 @@ def verify_decision_command(before: dict, after: dict, command: ResolvedDecision
     return decision_outcome(before, after, command) is not None
 
 
+def _never(clause) -> bool:
+    """True when a trigger block contains ``always = no`` anywhere (the decision can never pass)."""
+    if isinstance(clause, dict):
+        return any((key == "always" and value == "no") or _never(value) for key, value in clause.items())
+    if isinstance(clause, list):
+        return any(_never(value) for value in clause)
+    return False
+
+
 def list_planet_decisions(state: dict, records: list[dict]) -> dict:
     """Read-only: our planets with their modifiers and the knowledge decisions they could take.
 
     Availability (potential/allow) needs runtime evaluation; the game's validator
-    decides at enactment. Decisions blocked by an observed ``NOT has_modifier``
-    allow clause are marked.
+    decides at enactment. Decisions whose potential or allow contains
+    ``always = no`` are left out; those blocked by an observed ``NOT
+    has_modifier`` allow clause are marked.
     """
     modifiers = state.get("planet_modifiers") or {}
     by_planet = modifiers.get("by_planet") if modifiers.get("known") is True else {}
@@ -260,6 +283,8 @@ def list_planet_decisions(state: dict, records: list[dict]) -> dict:
         definition = record.get("definition") if isinstance(record, dict) else None
         if not isinstance(definition, dict) or definition.get("owned_planets_only") != "yes":
             continue
+        if _never(definition.get("potential")) or _never(definition.get("allow")):
+            continue  # e.g. decision_planet_food_boost in 4.5.2 (live: validator rejected it)
         try:
             cost = decision_definition({"status": "found", "definition": definition}).cost_dict()
         except ValueError:

@@ -117,3 +117,22 @@ def test_listing_marks_decisions_an_observed_modifier_blocks():
                                     "cost": {"food": 1000.0}, "blocked_by_modifier": "planet_food_boost"}]
     assert listed["planets"][0] == {"planet_id": "3", "name": "Earth", "modifiers": ["planet_food_boost"],
                                     "blocked": ["decision_planet_food_boost"]}
+
+
+def test_listing_leaves_out_decisions_that_can_never_pass():
+    never = {"owned_planets_only": "yes", "potential": {"owner": {"is_regular_empire": "yes"}, "always": "no"}}
+    nested = {"owned_planets_only": "yes", "allow": {"OR": [{"always": "no"}]}}
+    records = [{"id": "decision_never", "definition": never}, {"id": "decision_nested", "definition": nested},
+               {"id": "decision_ok", "definition": {"owned_planets_only": "yes", "potential": {"always": "yes"}}}]
+    assert [entry["decision_id"] for entry in list_planet_decisions(_state(), records)["decisions"]] == ["decision_ok"]
+
+
+def test_tiered_costs_keep_each_resource_and_its_smallest_tier():
+    tiers = [{"trigger": ["pop_amount", "<", 1000], "consumer_goods": 100},
+             {"trigger": {">": 1000}, "consumer_goods": 600}]
+    definition = decision_definition({"status": "found", "definition": {
+        "owned_planets_only": "yes", "resources": {"category": "decisions", "cost": tiers}}})
+    assert definition.cost == (("consumer_goods", 100.0),)
+    with pytest.raises(ValueError, match="tiers"):
+        decision_definition({"status": "found", "definition": {"owned_planets_only": "yes",
+                                                               "resources": {"cost": [{"trigger": {}}]}}})
