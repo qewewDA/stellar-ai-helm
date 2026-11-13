@@ -13,9 +13,9 @@ CYGNUS_453_SHA256 = "2f0fc2a91ccec9f77d390a5d198195927158c22444216a03596a23007fb
 SOURCES = ("native_research.js", "native_ship.js", "native_ship_colony.js",
            "native_planet.js", "native_fleet.js")
 # Statically located in the 4.5.2 executable only (policy/edict, fleet stance,
-# queue priority and defense platform commands). The 4.5.3 translation keeps
+# queue priority, defense platform, event option and diplomatic action commands). The 4.5.3 translation keeps
 # exactly SOURCES, so it never maps these RVAs.
-LEGACY_ONLY_SOURCES = ("native_country.js", "native_control.js", "native_events.js")
+LEGACY_ONLY_SOURCES = ("native_country.js", "native_control.js", "native_events.js", "native_diplomacy.js")
 
 # Each entry was re-identified in the 4.5.3 executable; this is not a uniform shift.
 _RVA_453 = {

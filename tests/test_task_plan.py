@@ -189,3 +189,16 @@ def test_event_option_step_is_typed_and_dispatched_to_the_event_command():
                 {**step, "script": "x"}):
         with pytest.raises(ValueError):
             normalize_plan([bad])
+
+
+def test_border_steps_are_typed_and_dispatched_to_the_diplomacy_command():
+    for kind in ("close_borders", "open_borders"):
+        step = {"kind": kind, "target_country_id": "73"}
+        normalized, _ = normalize_plan([step])
+        assert normalized == [step]
+        connection = Calls()
+        assert dispatch_step(connection, copy.deepcopy(step)) == "existing-api-result"
+        assert connection.calls == [("diplomacy_command", (kind,), {"target_country_id": "73"})]
+        for bad in ({**step, "target_country_id": "0"}, {**step, "target_country_id": 73}, {**step, "x": "1"}):
+            with pytest.raises(ValueError):
+                normalize_plan([bad])

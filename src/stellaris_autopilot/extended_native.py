@@ -15,12 +15,14 @@ from .control_commands import (ControlRequest, ResolvedControlCommand, resolve_c
                                verify_control_command, native_control_payload)
 from .event_commands import (EventRequest, ResolvedEventCommand, resolve_event_command,
                              verify_event_command, native_event_payload)
+from .diplomacy_commands import (DiplomacyRequest, ResolvedDiplomacyCommand, resolve_diplomacy_command,
+                                 verify_diplomacy_command, native_diplomacy_payload)
 
 
 REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest, ControlRequest,
-                 EventRequest)
+                 EventRequest, DiplomacyRequest)
 RESOLVED_TYPES = (ShipConstruction, ResolvedPlanetCommand, FleetOperation, ColonyShipConstruction,
-                  ResolvedCountryCommand, ResolvedControlCommand, ResolvedEventCommand)
+                  ResolvedCountryCommand, ResolvedControlCommand, ResolvedEventCommand, ResolvedDiplomacyCommand)
 
 
 def resolve_extended(state, request):
@@ -38,6 +40,8 @@ def resolve_extended(state, request):
         return resolve_control_command(state, request)
     if isinstance(request, EventRequest):
         return resolve_event_command(state, request)
+    if isinstance(request, DiplomacyRequest):
+        return resolve_diplomacy_command(state, request)
     raise ValueError("Unsupported extended native request")
 
 
@@ -56,6 +60,8 @@ def verify_extended(before, after, command):
         return verify_control_command(before, after, command)
     if isinstance(command, ResolvedEventCommand):
         return verify_event_command(before, after, command)
+    if isinstance(command, ResolvedDiplomacyCommand):
+        return verify_diplomacy_command(before, after, command)
     return False
 
 
@@ -82,4 +88,6 @@ def extended_payload(command, token):
         return native_control_payload(command, token)
     if isinstance(command, ResolvedEventCommand):
         return native_event_payload(command, token)
+    if isinstance(command, ResolvedDiplomacyCommand):
+        return native_diplomacy_payload(command, token)
     raise ValueError("Unsupported resolved native command")

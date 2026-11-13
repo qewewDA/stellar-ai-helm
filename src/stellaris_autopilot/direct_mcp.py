@@ -44,6 +44,7 @@ from .colony_ships import colony_ship_request
 from .planet_commands import planet_request
 from .country_commands import country_request, definition_from_record
 from .control_commands import control_request
+from .diplomacy_commands import diplomacy_request
 from .event_commands import (EventCatalog, ResolvedEventCommand, describe_pending_events, event_request,
                              observed_effects)
 from .fleet_native import fleet_request
@@ -338,6 +339,9 @@ class DirectConnection:
 
     def event_command(self, kind: str, **payload) -> dict:
         return self._extended(event_request(kind, **payload))
+
+    def diplomacy_command(self, kind: str, **payload) -> dict:
+        return self._extended(diplomacy_request(kind, **payload))
 
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
@@ -1057,6 +1061,40 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                 player_event_id=player_event_id, option_index=option_index)
 
     @server.tool(annotations=readonly)
+    async def list_diplomacy() -> dict:
+        """List our side of every known relation: contact, communications, hostility and border state.
+
+        Reads the latest snapshot only; never publishes a command. target ids
+        are the save's country ids. Use request_observation first for a fresh dump.
+        """
+        observed = await call_write(connection.observe)
+        state = observed.get("state") if isinstance(observed, dict) else None
+        diplomacy = state.get("diplomacy") if isinstance(state, dict) else None
+        if not isinstance(diplomacy, dict) or diplomacy.get("known") is not True:
+            return {"status": "blocked", "reason": "Diplomatic relations are not exactly observable in this snapshot"}
+        return {"status": "observed", "snapshot": observed.get("snapshot"), "date": state.get("date"),
+                "relations": [{key: value for key, value in relation.items() if key != "relation"}
+                              for _, relation in sorted(diplomacy["by_country"].items(), key=lambda item: int(item[0]))]}
+
+    @server.tool(annotations=writing)
+    async def close_borders(target_country_id: str) -> dict:
+        """Close our borders to one contacted country through the normal diplomatic proposal command.
+
+        Unilateral. Requires a paused session; the game's validator decides and its
+        reason is returned on rejection. Verified when our relation to that country
+        gains closed_borders on the same day and nothing else of ours changed.
+        """
+        return await call_write(connection.diplomacy_command, "close_borders", target_country_id=target_country_id)
+
+    @server.tool(annotations=writing)
+    async def open_borders(target_country_id: str) -> dict:
+        """Reopen our borders to one country we closed them to, through the normal proposal command.
+
+        Unilateral. Same paused/validator/verification rules as close_borders.
+        """
+        return await call_write(connection.diplomacy_command, "open_borders", target_country_id=target_country_id)
+
+    @server.tool(annotations=readonly)
     def list_actions() -> list[dict]:
         """Read the locally authorized direct actions and their effects."""
         config, native = context()
@@ -1094,7 +1132,9 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "set_fleet_stance": "Set one owned fleet's passive/aggressive/evasive stance normally",
                                     "move_queue_item": "Move one owned construction item one place up or down in its queue",
                                     "queue_defense_platform": "Queue one defense platform at an owned starbase with normal payment",
-                                    "choose_event_option": "Choose one option of one open event popup through the normal command"}[action]}
+                                    "choose_event_option": "Choose one option of one open event popup through the normal command",
+                                    "close_borders": "Close our borders to one contacted country (unilateral diplomatic action)",
+                                    "open_borders": "Reopen our borders to one country (unilateral diplomatic action)"}[action]}
                    for action in config.allowed_native_actions])
 
     @server.tool(annotations=readonly)

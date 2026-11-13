@@ -16,6 +16,7 @@ from .planet_commands import planet_request
 from .fleet_native import fleet_request
 from .control_commands import control_request
 from .event_commands import event_request
+from .diplomacy_commands import diplomacy_request
 
 
 class _Step(BaseModel):
@@ -136,6 +137,11 @@ class EventOptionStep(_Step):
     option_index: StrictInt
 
 
+class BordersStep(_Step):
+    kind: Literal["close_borders", "open_borders"]
+    target_country_id: StrictStr
+
+
 class PauseStep(_Step):
     kind: Literal["set_paused"]
     paused: StrictBool
@@ -145,7 +151,7 @@ PlanStep = Annotated[
     ResearchStep | DistrictStep | BuildingStep | ShipStep | ColonyShipStep | UpgradeStep
     | DemolishStep | ConvertStep | CancelConstructionStep | FleetTargetStep | StationStep
     | FleetMoveStep | FleetWaitStep | FleetStopStep | FleetStanceStep | QueueMoveStep
-    | DefensePlatformStep | EventOptionStep | PauseStep,
+    | DefensePlatformStep | EventOptionStep | BordersStep | PauseStep,
     Field(discriminator="kind"),
 ]
 PlanSteps = Annotated[list[PlanStep], Field(min_length=1, max_length=20)]
@@ -167,6 +173,8 @@ def dispatch_step(connection, step: dict):
         return connection.control_command(kind, **args)
     if kind == "choose_event_option":
         return connection.event_command(kind, **args)
+    if kind in {"close_borders", "open_borders"}:
+        return connection.diplomacy_command(kind, **args)
     if kind.startswith("fleet_"):
         return connection.issue_order(step)
     if kind in {"survey_planet", "colonize_planet", "build_station"}:
@@ -194,6 +202,7 @@ class _Validate:
     planet_command = staticmethod(planet_request)
     control_command = staticmethod(control_request)
     event_command = staticmethod(event_request)
+    diplomacy_command = staticmethod(diplomacy_request)
     select_research = staticmethod(research_selection)
     queue_district = staticmethod(district_request)
     queue_building = staticmethod(building_request)

@@ -100,12 +100,15 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "set_policy", "activate_edict", "deactivate_edict",
                           "set_fleet_stance", "move_queue_item", "queue_defense_platform",
                           "list_pending_events", "choose_event_option",
+                          "list_diplomacy", "close_borders", "open_borders",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}
     assert tools["observe_empire"].annotations.readOnlyHint is True
     assert tools["list_pending_events"].annotations.readOnlyHint is True
     assert tools["choose_event_option"].annotations.readOnlyHint is False
     assert set(tools["choose_event_option"].inputSchema["properties"]) == {"player_event_id", "option_index"}
+    assert tools["list_diplomacy"].annotations.readOnlyHint is True
+    assert not tools["list_diplomacy"].inputSchema.get("properties")
     assert tools["probe_connection"].annotations.readOnlyHint is False
     assert tools["request_observation"].annotations.readOnlyHint is False
     assert set(tools["execute_action"].inputSchema["properties"]) == {"action_id"}
@@ -124,6 +127,8 @@ EXTENDED_ARGUMENTS = [
     ("survey_planet", {"fleet_id": "1", "planet_id": "104"}),
     ("build_station", {"fleet_id": "2", "planet_id": "104", "station_type": "outpost"}),
     ("colonize_planet", {"fleet_id": "3", "planet_id": "105"}),
+    ("close_borders", {"target_country_id": "73"}),
+    ("open_borders", {"target_country_id": "73"}),
 ]
 
 
@@ -855,3 +860,26 @@ def test_test_event_verification_needs_exactly_one_new_player_test_event():
     assert direct._test_event_fired(before, _pending(**{"7": ("first_contact.1", "0"), "9": (TEST_EVENT_ID, "0"),
                                                         "10": (TEST_EVENT_ID, "0")})) is False
     assert direct._test_event_fired(before, {"pending_events": {"known": False}}) is False
+
+
+class _DiplomacyConnection(_EventConnection):
+    def diplomacy_command(self, kind, **payload):
+        self.calls.append((kind, payload))
+        return {"status": "recorded"}
+
+
+def test_border_tools_pass_typed_payloads_and_list_diplomacy_never_publishes(config_path):
+    relation = {"country": "73", "country_type": "nice_faction", "contact": True, "communications": True,
+                "hostile": True, "closed_borders": False, "relation": [["owner", "0"]]}
+    connection = _DiplomacyConnection({"date": "2209.02.06", "country_id": "0",
+                                       "diplomacy": {"known": True, "by_country": {"73": relation}}})
+    server = direct.build_direct_server(config_path, connection=connection)
+    listed = invoke(server, "list_diplomacy")
+    assert listed["status"] == "observed" and listed["relations"][0]["country"] == "73"
+    assert "relation" not in listed["relations"][0] and connection.calls == []
+    assert invoke(server, "close_borders", {"target_country_id": "73"}) == {"status": "recorded"}
+    assert invoke(server, "open_borders", {"target_country_id": "73"}) == {"status": "recorded"}
+    assert connection.calls == [("close_borders", {"target_country_id": "73"}),
+                                ("open_borders", {"target_country_id": "73"})]
+    unknown = _DiplomacyConnection({"date": "2209.02.06", "diplomacy": {"known": False}})
+    assert invoke(direct.build_direct_server(config_path, connection=unknown), "list_diplomacy")["status"] == "blocked"
