@@ -14,6 +14,7 @@ from .ship_commands import ship_request
 from .colony_ships import colony_ship_request
 from .planet_commands import planet_request
 from .fleet_native import fleet_request
+from .control_commands import control_request
 
 
 class _Step(BaseModel):
@@ -110,6 +111,24 @@ class FleetStopStep(_Step):
     fleet_id: StrictStr
 
 
+class FleetStanceStep(_Step):
+    kind: Literal["set_fleet_stance"]
+    fleet_id: StrictStr
+    stance: Literal["passive", "aggressive", "evasive"]
+
+
+class QueueMoveStep(_Step):
+    kind: Literal["move_queue_item"]
+    item_id: StrictStr
+    direction: Literal["up", "down"]
+
+
+class DefensePlatformStep(_Step):
+    kind: Literal["queue_defense_platform"]
+    starbase_id: StrictStr
+    design_id: StrictStr
+
+
 class PauseStep(_Step):
     kind: Literal["set_paused"]
     paused: StrictBool
@@ -118,7 +137,8 @@ class PauseStep(_Step):
 PlanStep = Annotated[
     ResearchStep | DistrictStep | BuildingStep | ShipStep | ColonyShipStep | UpgradeStep
     | DemolishStep | ConvertStep | CancelConstructionStep | FleetTargetStep | StationStep
-    | FleetMoveStep | FleetWaitStep | FleetStopStep | PauseStep,
+    | FleetMoveStep | FleetWaitStep | FleetStopStep | FleetStanceStep | QueueMoveStep
+    | DefensePlatformStep | PauseStep,
     Field(discriminator="kind"),
 ]
 PlanSteps = Annotated[list[PlanStep], Field(min_length=1, max_length=20)]
@@ -136,6 +156,8 @@ def dispatch_step(connection, step: dict):
     """Call the existing typed API; also usable with a validation-only target."""
     kind = step["kind"]
     args = {key: value for key, value in step.items() if key != "kind"}
+    if kind in {"set_fleet_stance", "move_queue_item", "queue_defense_platform"}:
+        return connection.control_command(kind, **args)
     if kind.startswith("fleet_"):
         return connection.issue_order(step)
     if kind in {"survey_planet", "colonize_planet", "build_station"}:
@@ -161,6 +183,7 @@ class _Validate:
     issue_order = staticmethod(parse_order)
     fleet_command = staticmethod(fleet_request)
     planet_command = staticmethod(planet_request)
+    control_command = staticmethod(control_request)
     select_research = staticmethod(research_selection)
     queue_district = staticmethod(district_request)
     queue_building = staticmethod(building_request)
@@ -179,7 +202,8 @@ def normalize_plan(steps, expected_snapshot: str | None = None) -> tuple[list[di
         dispatch_step(_Validate(), step)
         if step["kind"] == "set_paused" and (index != 0 or step["paused"] is not True):
             raise ValueError("A plan may explicitly pause only as its first step; time advancement is separate")
-        fleet = step.get("fleet_id")
+        # A stance change is not an order; it never conflicts with one.
+        fleet = step.get("fleet_id") if step["kind"] != "set_fleet_stance" else None
         if fleet in fleets:
             raise ValueError("This fleet already has an unfinished plan order; use separate natural-completion tasks")
         if fleet is not None and step["kind"] != "fleet_stop":

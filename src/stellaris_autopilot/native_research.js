@@ -334,6 +334,8 @@ function consumePending(source = 'run') {
                     : request.kind === 'queue_colony_ship' ? prepareColonyShipCommand(request)
                     : ['set_policy', 'activate_edict', 'deactivate_edict'].includes(request.kind)
                     ? prepareCountryCommand(request)
+                    : ['set_fleet_stance', 'move_queue_item', 'queue_defense_platform'].includes(request.kind)
+                    ? prepareControlCommand(request)
                     : ['upgrade_building', 'demolish_building', 'convert_zone', 'cancel_construction'].includes(request.kind)
                     ? preparePlanetCommand(request) : prepareFleetCommand(request);
                 command = prepared.command;
@@ -516,7 +518,8 @@ rpc.exports = {
         } else {
             canonical = canonicalShipRequest(request) || canonicalColonyShipRequest(request)
                 || canonicalPlanetRequest(request) || canonicalFleetRequest(request)
-                || (typeof canonicalCountryRequest === 'function' ? canonicalCountryRequest(request) : null);
+                || (typeof canonicalCountryRequest === 'function' ? canonicalCountryRequest(request) : null)
+                || (typeof canonicalControlRequest === 'function' ? canonicalControlRequest(request) : null);
             if (canonical === null) throw new Error('Unknown native kind or malformed typed payload');
         }
         if (states.has(request.token)) {

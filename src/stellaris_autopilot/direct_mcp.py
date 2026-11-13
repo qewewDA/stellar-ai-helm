@@ -43,6 +43,7 @@ from .ship_commands import ship_request
 from .colony_ships import colony_ship_request
 from .planet_commands import planet_request
 from .country_commands import country_request, definition_from_record
+from .control_commands import control_request
 from .fleet_native import fleet_request
 from .extended_native import REQUEST_TYPES, RESOLVED_TYPES, resolve_extended, verify_extended
 from .assistant_prompts import register_prompts
@@ -307,6 +308,9 @@ class DirectConnection:
 
     def country_command(self, kind: str, definition=None, **payload) -> dict:
         return self._extended(country_request(kind, definition, **payload))
+
+    def control_command(self, kind: str, **payload) -> dict:
+        return self._extended(control_request(kind, **payload))
 
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
@@ -932,6 +936,38 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         """
         return await call_write(connection.country_command, "deactivate_edict", None, edict=edict_id)
 
+    @server.tool(annotations=writing)
+    async def set_fleet_stance(fleet_id: str, stance: str) -> dict:
+        """Set one owned mobile fleet's stance (passive, aggressive or evasive) normally.
+
+        Requires a paused session. The game's validator decides whether the
+        fleet may change stance. Verification needs exactly that fleet's stance
+        changed and nothing else, including stockpiles and construction.
+        """
+        return await call_write(connection.control_command, "set_fleet_stance", fleet_id=fleet_id, stance=stance)
+
+    @server.tool(annotations=writing)
+    async def move_queue_item(item_id: str, direction: str) -> dict:
+        """Move one owned construction item one place up or down within its queue.
+
+        Read item_id from construction.items_by_id and the order from
+        control_state.queue_orders. Requires a paused session. Verification needs
+        exactly that adjacent swap, with items, progress and stockpiles unchanged.
+        """
+        return await call_write(connection.control_command, "move_queue_item", item_id=item_id, direction=direction)
+
+    @server.tool(annotations=writing)
+    async def queue_defense_platform(starbase_id: str, design_id: str) -> dict:
+        """Queue one normally paid defense platform from a current platform design at an owned starbase.
+
+        Read starbases from control_state.starbase_queues and designs from
+        shipbuilding.designs_by_id (military_station_* sizes). Requires a paused
+        session. The game checks design availability, platform capacity and
+        cost; a new exact unfinished paid platform job must be observed.
+        """
+        return await call_write(connection.control_command, "queue_defense_platform",
+                                starbase_id=starbase_id, design_id=design_id)
+
     @server.tool(annotations=readonly)
     def list_actions() -> list[dict]:
         """Read the locally authorized direct actions and their effects."""
@@ -964,7 +1000,10 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "colonize_planet": "Order one colony fleet to colonize one exact observed planet",
                                     "set_policy": "Change one active policy to a known option, respecting its cooldown",
                                     "activate_edict": "Activate one edict with normal legality checks and exact payment",
-                                    "deactivate_edict": "Cancel one active edict normally, verifying no refund"}[action]}
+                                    "deactivate_edict": "Cancel one active edict normally, verifying no refund",
+                                    "set_fleet_stance": "Set one owned fleet's passive/aggressive/evasive stance normally",
+                                    "move_queue_item": "Move one owned construction item one place up or down in its queue",
+                                    "queue_defense_platform": "Queue one defense platform at an owned starbase with normal payment"}[action]}
                    for action in config.allowed_native_actions])
 
     @server.tool(annotations=readonly)

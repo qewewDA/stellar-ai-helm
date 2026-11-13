@@ -11,11 +11,13 @@ from .colony_ships import (ColonyShipRequest, ColonyShipConstruction, colony_shi
                            resolve_colony_ship, verify_colony_ship, colony_ship_payload)
 from .country_commands import (CountryRequest, ResolvedCountryCommand, resolve_country_command,
                                verify_country_command, native_country_payload)
+from .control_commands import (ControlRequest, ResolvedControlCommand, resolve_control_command,
+                               verify_control_command, native_control_payload)
 
 
-REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest)
+REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest, ControlRequest)
 RESOLVED_TYPES = (ShipConstruction, ResolvedPlanetCommand, FleetOperation, ColonyShipConstruction,
-                  ResolvedCountryCommand)
+                  ResolvedCountryCommand, ResolvedControlCommand)
 
 
 def resolve_extended(state, request):
@@ -29,6 +31,8 @@ def resolve_extended(state, request):
         return resolve_fleet(state, request)
     if isinstance(request, CountryRequest):
         return resolve_country_command(state, request)
+    if isinstance(request, ControlRequest):
+        return resolve_control_command(state, request)
     raise ValueError("Unsupported extended native request")
 
 
@@ -43,6 +47,8 @@ def verify_extended(before, after, command):
         return verify_fleet(before, after, command)
     if isinstance(command, ResolvedCountryCommand):
         return verify_country_command(before, after, command)
+    if isinstance(command, ResolvedControlCommand):
+        return verify_control_command(before, after, command)
     return False
 
 
@@ -65,4 +71,6 @@ def extended_payload(command, token):
         return {"kind": command.kind, "country_id": "0", "token": token, **command.to_dict()}
     if isinstance(command, ResolvedCountryCommand):
         return native_country_payload(command, token)
+    if isinstance(command, ResolvedControlCommand):
+        return native_control_payload(command, token)
     raise ValueError("Unsupported resolved native command")

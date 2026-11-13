@@ -98,6 +98,7 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "queue_ship", "upgrade_building", "demolish_building", "convert_zone", "cancel_construction",
                           "survey_planet", "build_station", "colonize_planet", "queue_colony_ship",
                           "set_policy", "activate_edict", "deactivate_edict",
+                          "set_fleet_stance", "move_queue_item", "queue_defense_platform",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}
     assert tools["observe_empire"].annotations.readOnlyHint is True
@@ -711,3 +712,59 @@ def test_country_tool_identifiers_cannot_be_console_code(config_path, monkeypatc
     with pytest.raises(ToolError):
         invoke(direct.build_direct_server(config_path, native_bridge=object()), "deactivate_edict",
                {"edict_id": value})
+
+
+class _ControlConnection:
+    def __init__(self):
+        self.calls = []
+
+    def control_command(self, kind, **payload):
+        self.calls.append((kind, payload))
+        return {"status": "recorded"}
+
+
+CONTROL_TOOLS = [
+    ("set_fleet_stance", {"fleet_id": "3", "stance": "aggressive"}),
+    ("move_queue_item", {"item_id": "7", "direction": "up"}),
+    ("queue_defense_platform", {"starbase_id": "0", "design_id": "3058"}),
+]
+
+
+@pytest.mark.parametrize("name,arguments", CONTROL_TOOLS)
+def test_control_tools_expose_only_exact_identifiers(config_path, name, arguments):
+    server = direct.build_direct_server(config_path)
+    tool = {tool.name: tool for tool in asyncio.run(server.list_tools())}[name]
+    assert set(tool.inputSchema["properties"]) == set(arguments) == set(tool.inputSchema["required"])
+    assert tool.annotations.readOnlyHint is False and tool.annotations.idempotentHint is False
+
+
+@pytest.mark.parametrize("name,arguments", CONTROL_TOOLS)
+def test_control_tools_require_launcher_owned_backend_before_observation(config_path, monkeypatch, name, arguments):
+    monkeypatch.setattr(direct, "DirectObserver", lambda *_: pytest.fail("A missing native backend read a snapshot"))
+    assert invoke(direct.build_direct_server(config_path), name, arguments)["status"] == "blocked"
+    assert invoke(direct.build_direct_server(config_path, native_bridge=object()), name, arguments)["status"] == "blocked"
+    assert not direct._configuration(config_path).state_dir.exists()
+
+
+def test_control_tools_pass_typed_payloads_to_the_connection(config_path):
+    connection = _ControlConnection()
+    server = direct.build_direct_server(config_path, connection=connection)
+    for name, arguments in CONTROL_TOOLS:
+        assert invoke(server, name, arguments) == {"status": "recorded"}
+    assert connection.calls == [(name, arguments) for name, arguments in CONTROL_TOOLS]
+
+
+@pytest.mark.parametrize("name,arguments", [
+    ("set_fleet_stance", {"fleet_id": "3", "stance": "hold"}),
+    ("set_fleet_stance", {"fleet_id": "03", "stance": "passive"}),
+    ("move_queue_item", {"item_id": "7", "direction": "top"}),
+    ("queue_defense_platform", {"starbase_id": "-1", "design_id": "3058"}),
+])
+def test_control_tools_reject_malformed_values_before_observation(config_path, monkeypatch, name, arguments):
+    monkeypatch.setattr(direct, "DirectObserver", lambda *_: pytest.fail("An invalid request read a snapshot"))
+    result = None
+    try:
+        result = invoke(direct.build_direct_server(config_path, native_bridge=object()), name, arguments)
+    except ToolError:
+        return
+    assert result["status"] == "blocked"

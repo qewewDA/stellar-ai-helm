@@ -270,6 +270,13 @@ def imported_queue_initialization(expected: dict, observed: dict) -> dict | None
         for queue_id in added:
             del new_queues[queue_id]
         new_construction["queue_count"] -= len(added)
+        # The same added queues also appear, empty, in the native queue order view.
+        orders = after.get("control_state", {}).get("queue_orders", {}).get("by_id")
+        if isinstance(orders, dict):
+            if any(orders.get(queue_id) != [] for queue_id in added):
+                return None
+            for queue_id in added:
+                del orders[queue_id]
         if before != after:
             return None
         return {"uncolonized_body_queues": sorted(changes, key=lambda item: int(item["planet_id"])),
