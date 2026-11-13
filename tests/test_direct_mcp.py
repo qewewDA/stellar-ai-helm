@@ -640,6 +640,10 @@ def test_ship_mcp_requires_paid_postconditions_and_correlated_native_dispatch(co
         assert len(backend.queries) == 0
     else:
         assert "context" not in result and "dispatch_state" not in result
+        # A failed postcondition never turns into a dump polling loop.
+        assert len(backend.queries) <= direct.MAX_VERIFICATION_DUMPS
+        if outcome in {"ack_only", "wrong_payment"}:
+            assert len(backend.queries) == direct.MAX_VERIFICATION_DUMPS and "fresh dumps" in result["reason"]
     record = records(config_path)[0]
     assert record["status"] == ("verified" if outcome == "paid" else "reconciled" if outcome == "rejected" else "unverified")
     recorded = json.loads(record["before_json"])["_native_operation"]
@@ -905,8 +909,10 @@ def test_test_contact_verification_needs_exactly_one_new_regular_empire_in_commu
     assert not direct._test_contact_established(before, _relations(**{"8": ("voidworms", True)}))
     assert not direct._test_contact_established(before, _relations(**{"8": ("voidworms", False), "5": ("default", False)}))
     assert not direct._test_contact_established(before, _relations(**{"5": ("default", True)}))
+    assert direct._test_contact_established(before, _relations(**{"8": ("voidworms", False), "5": ("default", True),
+                                                                 "6": ("default", True)}))
     assert not direct._test_contact_established(before, _relations(**{"8": ("voidworms", False), "5": ("default", True),
-                                                                     "6": ("default", True)}))
+                                                                     "6": ("tiyanki", True)}))
     later = {**_relations(**{"8": ("voidworms", False), "5": ("default", True)}), "date": "2209.08.07"}
     assert not direct._test_contact_established(before, later)
     assert not direct._test_contact_established({"date": "x"}, {"date": "x", "country_id": "0"})

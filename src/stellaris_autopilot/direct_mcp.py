@@ -87,8 +87,17 @@ def _test_event_fired(before: dict, after: dict) -> bool:
             and len(added) == 1 and added[0].get("event_id") == TEST_EVENT_ID)
 
 
+# Fresh dumps requested to verify one operation (receipt plus settle); never a polling loop.
+MAX_VERIFICATION_DUMPS = 3
+
+
 def _test_contact_established(before: dict, after: dict) -> bool:
-    """Exactly one AI regular empire gained communications with us on the same day; nothing else of ours moved."""
+    """At least one regular empire gained communications with us on the same day; nothing else of ours moved.
+
+    Live 4.5.2 (2026-11-14): communications with one empire also reached its
+    allies in the same tick (three new regular empires), so every changed
+    relation must be a regular empire newly in communication with us.
+    """
     if before.get("date") != after.get("date") or after.get("country_id") != "0":
         return False
     old, new = before.get("diplomacy"), after.get("diplomacy")
@@ -98,12 +107,11 @@ def _test_contact_established(before: dict, after: dict) -> bool:
     if any(key not in second for key in first):
         return False
     changed = [key for key, value in second.items() if first.get(key) != value]
-    if len(changed) != 1:
-        return False
-    target, previous = second[changed[0]], first.get(changed[0])
-    return (target.get("country_type") == "default" and target.get("contact") is True
-            and target.get("communications") is True
-            and (previous is None or previous.get("communications") is False))
+    return bool(changed) and all(
+        second[key].get("country_type") == "default" and second[key].get("contact") is True
+        and second[key].get("communications") is True
+        and (first.get(key) is None or first[key].get("communications") is False)
+        for key in changed)
 
 
 def _native_matches(result: dict | None, token: str, kind: str, payload: dict | None = None) -> bool:
@@ -479,10 +487,12 @@ class DirectConnection:
                     atomic_publish(config, token, action_id=action_id)
                 else:
                     publish_order(config, order, token)
+                verification_dumps = 0
                 if selection is None and self.native_bridge is not None:
                     dump_token = uuid.uuid4().hex
                     query_kind = "run_inbox"
                     self.native_bridge.run_inbox(dump_token)
+                    verification_dumps = 1
                 journal.update(operation_id, "dispatched", f"Direct action published; token={token}")
                 deadline = time.monotonic() + config.verification_timeout_seconds
                 reason = "No fresh matching receipt and postconditions; inspect game readiness and native wake status"
@@ -598,6 +608,13 @@ class DirectConnection:
                                              else "Fresh state confirms military fleet wait orders (up to 30 days).")}
                         if self.native_bridge is not None and dump_token is None and (
                                 selection is None or (native_matches and native_status.get("status") == "submitted")):
+                            # Each dump shows the in-game "saving" notice. A paused game does not
+                            # change between dumps, so a failed check is not polled with more dumps.
+                            if verification_dumps >= MAX_VERIFICATION_DUMPS:
+                                reason = (f"Postconditions were not met in {verification_dumps} fresh dumps; "
+                                          "stopped requesting dumps; inspect before retrying")
+                                break
+                            verification_dumps += 1
                             dump_token = uuid.uuid4().hex
                             query_kind = "run_inbox" if isinstance(selection, PauseRequest) else "request_observation"
                             if query_kind == "run_inbox":
@@ -707,7 +724,8 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
     writing = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
     plan_writing = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False)
-    workflow = TaskWorkflow(connection, store_path)
+    workflow = TaskWorkflow(connection, store_path,
+                            definitions=lambda kind, category, object_id: country_definition(kind, category, object_id))
 
     async def call_write(method, *args, **kwargs):
         try:
