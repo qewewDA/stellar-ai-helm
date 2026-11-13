@@ -35,7 +35,12 @@ DUMP_NAME = "dump_qs_direct.sav.txt"
 OWNERSHIP_HEADER = "# SAA_DIRECT_INBOX_V1"
 PROBE_ACTION = "probe_connection"
 HOLD_ACTION = "hold_military_fleets"
-_ACTIONS = frozenset({PROBE_ACTION, HOLD_ACTION})
+# Test-save only: fires one reviewed vanilla player event with two options whose
+# effects differ (a: -1000 energy + modifier; b: monthly alloys), so option order
+# and paused effects can be proved. Enabled only by an explicit launcher flag.
+TEST_EVENT_ACTION = "fire_test_event"
+TEST_EVENT_ID = "grand_archive.2400"
+_ACTIONS = frozenset({PROBE_ACTION, HOLD_ACTION, TEST_EVENT_ACTION})
 ORDER_KINDS = frozenset({"fleet_wait", "fleet_orbit", "fleet_move", "fleet_stop"})
 NATIVE_ACTIONS = frozenset({"select_research", "queue_district", "queue_building", "set_paused", "queue_ship",
                             "upgrade_building", "demolish_building", "convert_zone", "cancel_construction",
@@ -226,6 +231,8 @@ def render_action(config: DirectConfig, action_id: str, token: str) -> str:
             "is_ship_class = shipclass_military is_in_combat = no } "
             "clear_fleet_actions = this clear_orders = yes queue_actions = { wait = 30 } } "
         )
+    elif action_id == TEST_EVENT_ACTION:
+        orders = f"country_event = {{ id = {TEST_EVENT_ID} }} "
     return (
         ownership_header(config)
         + "effect if = { limit = { is_ai = no is_ironman = no is_multiplayer = no "

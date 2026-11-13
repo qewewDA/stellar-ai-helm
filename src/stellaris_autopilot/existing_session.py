@@ -26,11 +26,12 @@ class ExistingGameSession:
 
     def __init__(self, game_dir: Path, state_root: Path, *, user_dir: Path | None = None,
                  pid: int | None = None, extended: bool = False, knowledge_bundle: Path | None = None,
-                 timeout_seconds: float = 120):
+                 timeout_seconds: float = 120, test_events: bool = False):
         if type(timeout_seconds) not in (int, float) or not 5 <= timeout_seconds <= 120:
             raise ValueError("Connection timeout must be between 5 and 120 seconds")
         self.game_dir, self.state_root = Path(game_dir), Path(state_root)
         self.user_dir, self.pid, self.extended = user_dir, pid, extended
+        self.test_events = test_events is True
         self.knowledge_bundle, self.timeout_seconds = knowledge_bundle, timeout_seconds
         self._runtime = self._knowledge = None
         self._operation = threading.RLock()
@@ -164,6 +165,8 @@ class ExistingGameSession:
                 self._phase("resolve_user_directory")
                 user_dir = resolve_user_dir(self.game_dir, self.user_dir)
                 options = {"cancel_event": _cancel_event} if _cancel_event is not None else {}
+                if self.test_events:
+                    options["test_events"] = True
                 runtime = connect_existing(self.game_dir / "stellaris.exe", self.state_root,
                                            user_dir=user_dir, pid=self.pid, extended=self.extended,
                                            timeout_seconds=self.timeout_seconds, progress=self._phase, **options)

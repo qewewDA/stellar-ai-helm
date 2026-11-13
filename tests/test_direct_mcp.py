@@ -833,3 +833,25 @@ def test_choose_event_option_refuses_ai_country_events_before_any_submission(con
             "choose_event_option", player_event_id="53", option_index=0)
     assert not backend.submissions and not backend.queries and not backend.cancellations
     assert not direct._configuration(config_path).state_dir.exists()
+
+
+def _pending(**events):
+    return {"pending_events": {"known": True, "selections": [], "by_id": {
+        key: {"id": key, "event_id": event, "country": country, "date": None, "scope": None}
+        for key, (event, country) in events.items()}}}
+
+
+def test_test_event_verification_needs_exactly_one_new_player_test_event():
+    from stellaris_autopilot.direct import TEST_EVENT_ID
+    before = _pending(**{"7": ("first_contact.1", "0"), "8": ("x.1", "16777222")})
+    fired = _pending(**{"7": ("first_contact.1", "0"), "8": ("x.1", "16777222"), "9": (TEST_EVENT_ID, "0")})
+    assert direct._test_event_fired(before, fired) is True
+    ai_resolved = _pending(**{"7": ("first_contact.1", "0"), "9": (TEST_EVENT_ID, "0")})
+    assert direct._test_event_fired(before, ai_resolved) is True
+    assert direct._test_event_fired(before, before) is False
+    assert direct._test_event_fired(before, _pending(**{"7": ("first_contact.1", "0"), "9": ("other.1", "0")})) is False
+    assert direct._test_event_fired(before, _pending(**{"7": ("first_contact.1", "0"), "9": (TEST_EVENT_ID, "8")})) is False
+    assert direct._test_event_fired(before, _pending(**{"9": (TEST_EVENT_ID, "0")})) is False
+    assert direct._test_event_fired(before, _pending(**{"7": ("first_contact.1", "0"), "9": (TEST_EVENT_ID, "0"),
+                                                        "10": (TEST_EVENT_ID, "0")})) is False
+    assert direct._test_event_fired(before, {"pending_events": {"known": False}}) is False

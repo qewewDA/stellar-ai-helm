@@ -486,3 +486,18 @@ def test_stdio_unsupported_build_returns_terminal_diagnostics_before_attachment(
 
     asyncio.run(asyncio.wait_for(run(), timeout=20))
     assert (user / ".qs_existing_controller.lock").read_bytes() == lock_before
+
+
+def test_test_event_authorization_is_passed_only_when_the_launcher_flag_is_set(tmp_path, monkeypatch):
+    runtime = _Runtime(tmp_path)
+    seen = []
+    monkeypatch.setattr(existing_session, "resolve_user_dir", lambda *args: tmp_path / "user")
+
+    def connect(*args, **kwargs):
+        seen.append(kwargs.get("test_events"))
+        return runtime
+    monkeypatch.setattr(existing_session, "connect_existing", connect)
+    assert _session(tmp_path).connect_game()["status"] == "connected"
+    flagged = ExistingGameSession(tmp_path / "game", tmp_path / "flagged", test_events=True)
+    assert flagged.connect_game()["status"] == "connected"
+    assert seen == [None, True]

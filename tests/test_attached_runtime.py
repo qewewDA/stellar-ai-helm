@@ -722,8 +722,9 @@ def test_connect_existing_passes_single_selection_and_extended_mode_to_host(tmp_
     calls = []
 
     class Runtime:
-        def __init__(self, process_arg, native_arg, user_dir, state_dir, token, *, extended=False):
+        def __init__(self, process_arg, native_arg, user_dir, state_dir, token, *, extended=False, test_events=False):
             calls.append(("init", process_arg, native_arg, Path(user_dir), Path(state_dir), token, extended))
+            calls.append(("test_events", test_events))
 
         def initialize(self):
             calls.append(("initialize",))
@@ -746,7 +747,11 @@ def test_connect_existing_passes_single_selection_and_extended_mode_to_host(tmp_
     assert calls[2][3] == user_dir and calls[2][4].parent == (tmp_path / "state").resolve() / "sessions"
     assert calls[2][5] != "a" * 32 and re.fullmatch(r"[0-9a-f]{32}", calls[2][5])
     assert calls[2][6] is True
-    assert calls[3] == ("initialize",)
+    assert calls[3] == ("test_events", False)
+    assert calls[4] == ("initialize",)
+    calls.clear()
+    connect_existing(executable, tmp_path / "state", user_dir=user_dir, pid=8240, extended=True, test_events=True)
+    assert ("test_events", True) in calls
 
 
 def test_connect_existing_closes_runtime_when_initialize_fails(tmp_path, monkeypatch):

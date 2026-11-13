@@ -319,3 +319,17 @@ def test_inbox_symlink_is_rejected_without_modifying_target(config, tmp_path):
     with pytest.raises(ValueError, match="regular file"):
         atomic_publish(config, TOKEN)
     assert target.read_text() == "preserve"
+
+
+def test_test_event_action_requires_authorization_and_renders_only_the_fixed_event(config):
+    from stellaris_autopilot.direct import TEST_EVENT_ACTION, TEST_EVENT_ID
+    with pytest.raises(ValueError, match="not locally authorized"):
+        atomic_publish(config, TOKEN, action_id=TEST_EVENT_ACTION)
+    authorized = replace(config, allowed_actions=(TEST_EVENT_ACTION,))
+    script = render_action(authorized, TEST_EVENT_ACTION, TOKEN)
+    body = loads(script.splitlines()[1].removeprefix("effect ")).get("if")
+    assert body.get("limit").get("is_ai") == "no"
+    assert body.get("limit").get("has_country_flag") == f"qs_direct_session_{SESSION}"
+    assert dict(body.get("country_event").items()) == {"id": TEST_EVENT_ID}
+    assert set(key for key, _ in body.items()) == {"limit", "country_event", "set_country_flag", "log"}
+    assert script.count("country_event") == 1 and "option" not in script

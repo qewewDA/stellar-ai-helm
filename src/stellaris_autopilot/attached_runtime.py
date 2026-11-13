@@ -12,7 +12,7 @@ from .attached_process import attach_game
 from .campaign import CampaignError, _atomic, package_dump
 from .connection_cancel import check_cancelled
 from .connection_diagnostics import ConnectionPreflightError, check_connection_preflight
-from .direct import (NATIVE_ACTIONS, ORDER_KINDS, OWNERSHIP_HEADER, DirectConfig,
+from .direct import (NATIVE_ACTIONS, ORDER_KINDS, OWNERSHIP_HEADER, TEST_EVENT_ACTION, DirectConfig,
                      disarm_inbox, load_direct_config, ownership_header)
 from .direct_mcp import DirectConnection, _controller_lock, validate_connection
 from .direct_observe import DirectObserver, clear_observation_caches
@@ -45,7 +45,7 @@ def resolve_user_dir(game_dir: Path, explicit: Path | None = None) -> Path:
 
 class AttachedRuntime:
     def __init__(self, process, native, user_dir: Path, state_dir: Path, token: str, *, extended=False,
-                 deadline=None, progress=None, cancel_event=None):
+                 test_events=False, deadline=None, progress=None, cancel_event=None):
         self.process, self.native = process, native
         self.user_dir, self.state_dir, self.token = Path(user_dir), Path(state_dir), token
         self.config_path = self.state_dir / "direct.json"
@@ -59,6 +59,7 @@ class AttachedRuntime:
         self._inbox_owned = False
         self._events = None
         self._extended = extended
+        self._test_events = test_events is True
         self._deadline, self._progress = deadline, progress
         self._cancel_event = cancel_event
         self.initial_summary = None
@@ -189,7 +190,8 @@ class AttachedRuntime:
         config = DirectConfig(
             user_dir=self.user_dir, state_dir=self.state_dir, country_id="0", campaign_id=meta["campaign_id"],
             verified_game_version=meta["game_version"], session_token=self.token,
-            allowed_actions=("probe_connection",),
+            allowed_actions=("probe_connection",) + (
+                (TEST_EVENT_ACTION,) if self._test_events and not observation_only else ()),
             allowed_orders=() if observation_only else
             tuple(sorted(ORDER_KINDS)) if self._extended else ("fleet_wait", "fleet_orbit"),
             allowed_native_actions=("set_paused",) if observation_only else
@@ -337,7 +339,7 @@ class AttachedRuntime:
 
 
 def connect_existing(executable: Path, state_root: Path, *, user_dir: Path, pid: int | None = None,
-                     extended: bool = False, timeout_seconds: float | None = None,
+                     extended: bool = False, test_events: bool = False, timeout_seconds: float | None = None,
                      progress=None, cancel_event: threading.Event | None = None) -> AttachedRuntime:
     if timeout_seconds is not None and (type(timeout_seconds) not in (int, float)
                                        or not 5 <= timeout_seconds <= 120):
@@ -369,6 +371,8 @@ def connect_existing(executable: Path, state_root: Path, *, user_dir: Path, pid:
             native_options["cancel_event"] = cancel_event
         native = NativeResearchBridge(process, executable, state_dir, **native_options)
         options = {"extended": extended}
+        if test_events is True:
+            options["test_events"] = True
         if deadline is not None or progress is not None:
             options.update(deadline=deadline, progress=progress)
         if cancel_event is not None:

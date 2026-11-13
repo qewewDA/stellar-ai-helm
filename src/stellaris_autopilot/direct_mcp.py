@@ -23,8 +23,8 @@ from mcp.types import ToolAnnotations
 from pydantic import Field, StrictBool, StrictInt
 
 from .direct import (
-    DirectConfig, atomic_publish, disarm_inbox, load_direct_config, publish_observation, publish_order,
-    publish_pause_verification,
+    TEST_EVENT_ACTION, TEST_EVENT_ID, DirectConfig, atomic_publish, disarm_inbox, load_direct_config,
+    publish_observation, publish_order, publish_pause_verification,
 )
 from .direct_observe import DirectObserver
 from .direct_orders import Order, parse_order, validate_order, verify_order
@@ -71,6 +71,19 @@ def _public(observation: Observation) -> dict:
     state = copy.deepcopy(observation.state)
     state.get("metadata", {}).pop("source", None)
     return {"snapshot": observation.digest, "modified_at": observation.modified_at, "state": state}
+
+
+def _test_event_fired(before: dict, after: dict) -> bool:
+    """Exactly one new open player event, the fixed test event; our earlier ones unchanged."""
+    old, new = before.get("pending_events"), after.get("pending_events")
+    if not (isinstance(old, dict) and isinstance(new, dict)
+            and old.get("known") is True and new.get("known") is True):
+        return False
+    old_ours = {key: value for key, value in old["by_id"].items() if value.get("country") == "0"}
+    new_ours = {key: value for key, value in new["by_id"].items() if value.get("country") == "0"}
+    added = [value for key, value in new_ours.items() if key not in old_ours]
+    return (all(new_ours.get(key) == value for key, value in old_ours.items())
+            and len(added) == 1 and added[0].get("event_id") == TEST_EVENT_ID)
 
 
 def _native_matches(result: dict | None, token: str, kind: str, payload: dict | None = None) -> bool:
@@ -342,7 +355,7 @@ class DirectConnection:
             if not supported:
                 return {"status": "blocked", "reason": "This build permits observation, pause and checkpoints; "
                         "gameplay actions need separate live verification"}
-        if order is None and selection is None and action_id not in {"probe_connection", "hold_military_fleets"}:
+        if order is None and selection is None and action_id not in {"probe_connection", "hold_military_fleets", TEST_EVENT_ACTION}:
             return {"status": "blocked", "reason": "Unknown fixed direct action"}
         config = _configuration(self.config_path)
         guard = getattr(self._plan_local, "guard", None)
@@ -489,7 +502,8 @@ class DirectConnection:
                         flags = after.state.get("direct_bridge", {}).get("done_flags", [])
                         if order is not None:
                             validate_order(after.state, order)
-                        target_set_matches = (selection is not None or order is not None or action_id == "probe_connection"
+                        target_set_matches = (selection is not None or order is not None
+                                              or action_id in {"probe_connection", TEST_EVENT_ACTION}
                                               or set(self._hold_targets(after.state)) == set(targets))
                         postconditions = (verify_extended(before.state, after.state, selection)
                                           if isinstance(selection, RESOLVED_TYPES)
@@ -508,6 +522,8 @@ class DirectConnection:
                                           if isinstance(selection, PauseRequest)
                                           else verify_research(after.state, selection) if selection is not None
                                           else verify_order(after.state, order) if order is not None
+                                          else _test_event_fired(before.state, after.state)
+                                          if action_id == TEST_EVENT_ACTION
                                           else action_id == "probe_connection" or self._orders_verified(after.state, targets))
                         receipt = ((native_matches and native_status.get("status") == "submitted")
                                    if selection is not None else f"qs_direct_done_{token}" in flags)
@@ -549,6 +565,9 @@ class DirectConnection:
                                              if selection is not None else "Fresh state confirms the exact requested fleet order queue. Arrival/completion is separate."
                                              if order is not None else "Bridge receipt confirmed. No gameplay action was requested."
                                              if action_id == "probe_connection"
+                                             else "Fresh state shows exactly one new open player event "
+                                             + TEST_EVENT_ID + "; no option was chosen."
+                                             if action_id == TEST_EVENT_ACTION
                                              else "Fresh state confirms military fleet wait orders (up to 30 days).")}
                         if self.native_bridge is not None and dump_token is None and (
                                 selection is None or (native_matches and native_status.get("status") == "submitted")):
@@ -1044,6 +1063,8 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         descriptions = {
             "probe_connection": "Set a connection receipt flag and verify a fresh dump; no gameplay order",
             "hold_military_fleets": "Clear orders of mobile military fleets outside combat; wait for 30 game days",
+            TEST_EVENT_ACTION: "Test save only (launcher flag): fire the fixed vanilla player event "
+                               + TEST_EVENT_ID + "; verify it opens; never chooses an option",
         }
         orders = {
             "fleet_wait": "Replace one observed fleet's orders with an exact 1–365 game-day wait",
