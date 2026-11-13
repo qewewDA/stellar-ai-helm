@@ -239,6 +239,27 @@ class SimulatedPauseBackend:
         return {"status": "cancelled", "token": token}
 
 
+class RunningGameBackend(SimulatedPauseBackend):
+    """The game ran unpaused: the last dump is stale until a dump is requested."""
+
+    def __init__(self, *args, dump="fresh", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dump = dump
+        self.observer.before = Observation(self.observer.before.state, "stale_before", time.time() - 3600)
+
+    def request_dump(self, token):
+        self.trace.append("request_dump")
+        self.queries[token] = {"status": "dump_requested", "token": token, "kind": "request_observation",
+                               "country_id": "0"}
+        if self.dump != "never":
+            state = deepcopy(self.observer.before.state)
+            state["date"] = "2202.05.01"
+            if self.dump == "foreign_session":
+                state["direct_bridge"]["session_flags"] = [f"qs_direct_session_{OTHER_TOKEN}"]
+            self.observer.before = Observation(state, "fresh_before", time.time())
+        return {"status": "pending", "token": token}
+
+
 @pytest.fixture
 def pause_connection(pause_config, monkeypatch):
     pytest.importorskip("mcp")
@@ -268,8 +289,8 @@ def pause_connection(pause_config, monkeypatch):
         finally:
             journal.close()
 
-    def configure(**kwargs):
-        backend = SimulatedPauseBackend(pause_config, observer, trace, **kwargs)
+    def configure(backend_class=SimulatedPauseBackend, **kwargs):
+        backend = backend_class(pause_config, observer, trace, **kwargs)
         connection = direct_mcp.DirectConnection(config_path, native_bridge=backend)
         return connection, observer, backend, trace, records
 
@@ -414,3 +435,30 @@ def test_mcp_pause_schema_and_valid_booleans_have_no_extra_command_parameters(pa
         "status": "captured", "paused": paused,
     }
     assert len(calls) == 1 and calls[0] is paused
+
+
+def test_pausing_a_running_game_requests_a_fresh_dump_instead_of_failing_on_a_stale_one(pause_connection, pause_config):
+    connection, observer, backend, trace, records = pause_connection(RunningGameBackend)
+    result = connection.set_paused(True)
+    assert result["status"] == "pause_verified" and result["date"] == "2202.05.01"
+    assert trace[:4] == ["request_dump", "publish_verification", "submit", "run_inbox"]
+    assert len(backend.submissions) == 1
+    (record,) = records()
+    assert record["status"] == "verified" and record["snapshot"] == "fresh_before"
+    assert "# disarmed" in pause_config.inbox_path.read_text(encoding="ascii")
+
+
+@pytest.mark.parametrize("dump", ["never", "foreign_session"])
+def test_a_stale_snapshot_without_a_valid_fresh_dump_still_blocks_before_any_pause_command(
+        pause_connection, pause_config, dump):
+    connection, _, backend, trace, records = pause_connection(RunningGameBackend, dump=dump)
+    result = connection.set_paused(True)
+    assert result["status"] == "blocked" and "stale" in result["reason"]
+    assert backend.submissions == [] and "submit" not in trace
+    assert records() == []
+
+
+def test_a_fresh_snapshot_pauses_without_an_extra_dump_request(pause_connection):
+    connection, _, _, trace, _ = pause_connection()
+    assert connection.set_paused(True)["status"] == "pause_verified"
+    assert "request_dump" not in trace

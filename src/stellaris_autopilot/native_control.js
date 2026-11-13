@@ -22,6 +22,50 @@ const qsValidateLowerPriority = new NativeFunction(base.add(0xacc700), 'uint8', 
 const qsCreateDefensePlatform = new NativeFunction(base.add(0x8cb340), 'pointer', [], 'win64');
 const qsSelectPlatformDesign = new NativeFunction(base.add(0xcd32b0), 'void', ['pointer', 'uint32'], 'win64');
 const qsStances = {passive: 0, aggressive: 1, evasive: 2};
+// Validator reason text (the UI tooltip path): a CString with +0 allocator
+// mode (0 = default heap), +8 allocator, +0x10 std::string (SSO buffer or
+// heap pointer, +0x20 size, +0x28 capacity). Validators append with
+// 0x1b2ef50; a heap buffer is released with the game's free (0x1b69180),
+// exactly like the validator's own temporaries.
+const qsFreeReasonText = new NativeFunction(base.add(0x1b69180), 'void', ['pointer'], 'win64');
+const qsReasonLimit = 4096;
+
+function qsReasonFromBuffer(reason) {
+    const size = Number(reason.add(0x20).readU64());
+    const capacity = Number(reason.add(0x28).readU64());
+    const heap = capacity >= 0x10;
+    const textPointer = heap ? reason.add(0x10).readPointer() : reason.add(0x10);
+    let text = '';
+    try {
+        if (size > 0 && !textPointer.isNull()) {
+            try { text = textPointer.readUtf8String(Math.min(size, qsReasonLimit)); }
+            catch (_) { text = textPointer.readCString(Math.min(size, qsReasonLimit)); }
+        }
+    } finally {
+        if (heap && reason.add(0).readU32() !== 1 && !textPointer.isNull()) qsFreeReasonText(textPointer);
+        reason.add(0x10).writeByteArray(new Array(0x18).fill(0));
+        reason.add(0x28).writeU64(15);
+    }
+    return qsCleanReasonText(text || '');
+}
+
+function qsCleanReasonText(text) {
+    // Strip colour/format codes (section sign + code char, and the bare
+    // bracket-less end marker) and collapse whitespace; the result is data.
+    return String(text).replace(/\u00a7[\s\S]?/g, '').replace(/\u00a3[^\u00a3\s]*\u00a3?/g, '')
+        .replace(/[\u0000-\u0008\u000b-\u001f]/g, '').replace(/[ \t]+/g, ' ')
+        .split('\n').map(line => line.trim()).filter(Boolean).join('\n').slice(0, qsReasonLimit);
+}
+
+function qsValidateWithReason(validate, command) {
+    const reason = Memory.alloc(0x40);
+    reason.writeByteArray(new Array(0x40).fill(0));
+    reason.add(0x28).writeU64(15);
+    const allowed = validate(command, reason) !== 0;
+    const text = qsReasonFromBuffer(reason);
+    return {allowed, reason: allowed ? '' : 'Normal native command validation rejected' + (text ? ': ' + text : ''),
+        native_reason: text};
+}
 
 function canonicalControlRequest(request) {
     if (request === null || typeof request !== 'object' || !qsControlKinds.has(request.kind)) return null;
@@ -142,7 +186,8 @@ function qsDefensePlatformCommand(request) {
         const nested = buildable;
         buildable = null; // Transfer is attempted once; never destroy aliases.
         command.add(0x20).writePointer(nested);
-        return {command, validate: validateQueue, meta: {native_design_id: Number(request.design_id)}};
+        return {command, validation: qsValidateWithReason(validateQueue, command),
+            meta: {native_design_id: Number(request.design_id)}};
     } catch (error) {
         if (command !== null && !command.isNull()) {
             const abandoned = command; command = null;

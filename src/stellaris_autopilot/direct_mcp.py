@@ -186,44 +186,53 @@ class DirectConnection:
     def request_observation(self) -> dict:
         config = _configuration(self.config_path)
         with _controller_lock(config):
-            observer = DirectObserver(config.dump_path, config.country_id)
-            published_at = time.time()
-            native_token = None
-            try:
-                publish_observation(config)
-                if self.native_bridge is not None:
-                    native_token = uuid.uuid4().hex
-                    self.native_bridge.request_dump(native_token)
-                deadline = time.monotonic() + config.verification_timeout_seconds
-                while time.monotonic() < deadline:
-                    if (config.state_dir / "STOP").exists():
-                        return {"status": "stopped", "reason": "STOP file exists"}
-                    try:
-                        # A dump older than the request can never be returned;
-                        # skip copying and parsing it until the game rewrites it.
-                        stale = getattr(observer, "is_stale", None)
-                        if stale is not None and stale(published_at):
-                            time.sleep(config.poll_seconds)
-                            continue
-                        observation = self._read(observer)
-                        if observation.modified_at >= published_at:
-                            validate_connection(config, observation)
-                            native_result = self.native_bridge.result(native_token) if native_token is not None else None
-                            if (native_token is None or (_native_matches(native_result, native_token, "request_observation")
-                                                         and native_result.get("status") == "dump_requested")):
-                                return {"status": "observed", **_public(observation),
-                                        **({"native_observation": native_result} if native_result is not None else {})}
-                    except (ValueError, OSError):
-                        pass
-                    time.sleep(config.poll_seconds)
-                return {"status": "unavailable", "reason": "No fresh matching dump; inspect game loading, pause guards or native wake readiness"}
-            finally:
-                if native_token is not None:
-                    try:
-                        self.native_bridge.cancel(native_token)
-                    except (ValueError, OSError):
-                        pass
-                disarm_inbox(config)
+            result = self._fresh_observation(config, DirectObserver(config.dump_path, config.country_id))
+            result.pop("_observation", None)
+            return result
+
+    def _fresh_observation(self, config: DirectConfig, observer: DirectObserver) -> dict:
+        """Request one dump and return it only once it is newer than the request.
+
+        The caller holds the controller lock. Every gate of validate_connection
+        (identity, build, session flag and freshness) applies to the result.
+        """
+        published_at = time.time()
+        native_token = None
+        try:
+            publish_observation(config)
+            if self.native_bridge is not None:
+                native_token = uuid.uuid4().hex
+                self.native_bridge.request_dump(native_token)
+            deadline = time.monotonic() + config.verification_timeout_seconds
+            while time.monotonic() < deadline:
+                if (config.state_dir / "STOP").exists():
+                    return {"status": "stopped", "reason": "STOP file exists"}
+                try:
+                    # A dump older than the request can never be returned;
+                    # skip copying and parsing it until the game rewrites it.
+                    stale = getattr(observer, "is_stale", None)
+                    if stale is not None and stale(published_at):
+                        time.sleep(config.poll_seconds)
+                        continue
+                    observation = self._read(observer)
+                    if observation.modified_at >= published_at:
+                        validate_connection(config, observation)
+                        native_result = self.native_bridge.result(native_token) if native_token is not None else None
+                        if (native_token is None or (_native_matches(native_result, native_token, "request_observation")
+                                                     and native_result.get("status") == "dump_requested")):
+                            return {"status": "observed", **_public(observation), "_observation": observation,
+                                    **({"native_observation": native_result} if native_result is not None else {})}
+                except (ValueError, OSError):
+                    pass
+                time.sleep(config.poll_seconds)
+            return {"status": "unavailable", "reason": "No fresh matching dump; inspect game loading, pause guards or native wake readiness"}
+        finally:
+            if native_token is not None:
+                try:
+                    self.native_bridge.cancel(native_token)
+                except (ValueError, OSError):
+                    pass
+            disarm_inbox(config)
 
     def probe(self) -> dict:
         return self.execute("probe_connection")
@@ -343,6 +352,16 @@ class DirectConnection:
         with _controller_lock(config):
             observer = DirectObserver(config.dump_path, config.country_id)
             before = self._read(observer)
+            if (isinstance(selection, PauseRequest) and self.native_bridge is not None
+                    and not fresh(before, config.max_snapshot_age_seconds)):
+                # A running game only rewrites the dump on request. Pausing it
+                # must not depend on an old dump: request a new one first and
+                # still apply every connection gate to that fresh snapshot.
+                refreshed = self._fresh_observation(config, observer)
+                if refreshed.get("status") != "observed":
+                    return {"status": "blocked", "reason": "The snapshot was stale and no fresh dump arrived: "
+                            + str(refreshed.get("reason")), "refresh": refreshed.get("status")}
+                before = refreshed["_observation"]
             validate_connection(config, before)
             if guard is not None:
                 guard["last_snapshot"] = before.digest

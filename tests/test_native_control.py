@@ -38,7 +38,15 @@ class Pointer {
     readU8() { return this.readNumber() & 0xff; }
     writePointer(value) { memory.set(this.value, value.value); return this; }
     writeU32(value) { memory.set(this.value, value); return this; }
+    readU64() { return this.readNumber(); }
+    writeU64(value) { memory.set(this.value, value); return this; }
+    writeByteArray(bytes) { bytes.forEach((byte, index) => memory.set(this.value + index, byte)); return this; }
+    readUtf8String(size) { return strings.get(this.value).slice(0, size); }
+    readCString(size) { return this.readUtf8String(size); }
 }
+const strings = new Map();
+const freed = [];
+let reasons = [];
 const put = (address, value) => memory.set(address, value);
 const base = new Pointer(0x140000000);
 let next = 0x900000;
@@ -53,6 +61,7 @@ function NativeFunction(address) {
             created.push({rva, object: object.value});
             return object;
         }
+        if (rva === 0x1b69180) { freed.push(values[0].value); return undefined; }
         if (rva === 0xcd32b0) {  // select design on the implementation at +8
             put(values[0].value + 0x530, values[1]);
             put(values[0].value + 0x52c, scenario === 'platform_bad_stage' ? 1 : 0);
@@ -116,7 +125,22 @@ const context = {
     validId: value => typeof value === 'string' && /^(0|[1-9][0-9]{0,9})$/.test(value),
     shipyardOwner: () => scenario === 'platform_foreign' ? 1 : 0,
     createQueue: () => { const object = new Pointer(next); next += 0x1000; created.push({rva: 0xacd7d0, object: object.value}); return object; },
-    validateQueue: 'validateQueue',
+    validateQueue: (command, reason) => {
+        reasons.push({null: reason.isNull(), mode: memory.get(reason.value), size: memory.get(reason.value + 0x20),
+            capacity: memory.get(reason.value + 0x28)});
+        if (scenario === 'platform_rejected_long') {
+            strings.set(0x77000, '\u00a7RNot enough \u00a3alloys\u00a3 Alloys\u00a7!\n   Platform capacity:  3/3 \n');
+            put(reason.value + 0x10, 0x77000); put(reason.value + 0x20, 58); put(reason.value + 0x28, 63);
+            return 0;
+        }
+        if (scenario === 'platform_rejected_short') {
+            strings.set(reason.value + 0x10, 'No slot');
+            put(reason.value + 0x20, 7);
+            return 0;
+        }
+        return 1;
+    },
+    Memory: {alloc: size => { const object = new Pointer(next); next += 0x1000; return object; }},
     destroyUnsubmitted: command => destroyed.push(command.value),
 };
 try {
@@ -127,6 +151,7 @@ try {
     process.stdout.write(JSON.stringify({accepted: true, factories: created.map(item => item.rva),
         f20: nested, f24: read(0x24), f28: read(0x28), f2c: read(0x2c), meta: prepared.meta,
         validate: typeof prepared.validate === 'string' ? prepared.validate : null,
+        validation: prepared.validation || null, reasons, freed,
         platform: request.kind === 'queue_defense_platform' ? {starbase: memory.get(nested + 0x540)} : null,
         destroyed}));
 } catch (error) {
@@ -176,7 +201,10 @@ def test_queue_priority_requires_the_exact_live_neighbour_in_an_owned_queue(scen
 def test_defense_platform_uses_the_platform_buildable_in_the_starbase_build_queue():
     result = _run("platform_ok")
     assert result["accepted"] is True and result["factories"] == [0x8cb340, 0xacd7d0]
-    assert (result["f28"], result["f2c"], result["validate"]) == (0, 2, "validateQueue")
+    assert (result["f28"], result["f2c"]) == (0, 2)
+    assert result["validation"] == {"allowed": True, "reason": "", "native_reason": ""}
+    assert result["reasons"] == [{"null": False, "mode": 0, "size": 0, "capacity": 15}]
+    assert result["freed"] == []
     assert result["platform"] == {"starbase": 0} and result["destroyed"] == []
 
 
@@ -200,3 +228,17 @@ def test_control_module_is_legacy_only_and_absent_from_the_453_translation():
     for rva in ("0xa70c40", "0xa61f40", "0xacd870", "0xacc290", "0xacd910", "0xacc700", "0x8cb340",
                 "0x31129d8", "0x3114b90", "0x3114ba0"):
         assert rva in legacy and rva not in cygnus
+
+
+def test_defense_platform_rejection_returns_the_game_reason_text_and_frees_its_heap_buffer():
+    result = _run("platform_rejected_long")
+    assert result["accepted"] is True and result["validation"]["allowed"] is False
+    assert result["validation"]["native_reason"] == "Not enough Alloys\nPlatform capacity: 3/3"
+    assert result["validation"]["reason"] == (
+        "Normal native command validation rejected: Not enough Alloys\nPlatform capacity: 3/3")
+    assert result["freed"] == [0x77000]
+
+
+def test_defense_platform_short_reason_stays_in_the_inline_buffer():
+    result = _run("platform_rejected_short")
+    assert result["validation"]["native_reason"] == "No slot" and result["freed"] == []
