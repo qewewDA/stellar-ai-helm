@@ -41,7 +41,8 @@ NATIVE_ACTIONS = frozenset({"select_research", "queue_district", "queue_building
                             "upgrade_building", "demolish_building", "convert_zone", "cancel_construction",
                             "survey_planet", "build_station", "colonize_planet", "queue_colony_ship",
                             "set_policy", "activate_edict", "deactivate_edict",
-                            "set_fleet_stance", "move_queue_item", "queue_defense_platform"})
+                            "set_fleet_stance", "move_queue_item", "queue_defense_platform",
+                            "choose_event_option"})
 _TOKEN = re.compile(r"[0-9a-f]{32}", re.ASCII)
 _COUNTRY = re.compile(r"[0-9]{1,10}", re.ASCII)
 

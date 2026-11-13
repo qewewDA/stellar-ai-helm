@@ -13,11 +13,14 @@ from .country_commands import (CountryRequest, ResolvedCountryCommand, resolve_c
                                verify_country_command, native_country_payload)
 from .control_commands import (ControlRequest, ResolvedControlCommand, resolve_control_command,
                                verify_control_command, native_control_payload)
+from .event_commands import (EventRequest, ResolvedEventCommand, resolve_event_command,
+                             verify_event_command, native_event_payload)
 
 
-REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest, ControlRequest)
+REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest, ControlRequest,
+                 EventRequest)
 RESOLVED_TYPES = (ShipConstruction, ResolvedPlanetCommand, FleetOperation, ColonyShipConstruction,
-                  ResolvedCountryCommand, ResolvedControlCommand)
+                  ResolvedCountryCommand, ResolvedControlCommand, ResolvedEventCommand)
 
 
 def resolve_extended(state, request):
@@ -33,6 +36,8 @@ def resolve_extended(state, request):
         return resolve_country_command(state, request)
     if isinstance(request, ControlRequest):
         return resolve_control_command(state, request)
+    if isinstance(request, EventRequest):
+        return resolve_event_command(state, request)
     raise ValueError("Unsupported extended native request")
 
 
@@ -49,6 +54,8 @@ def verify_extended(before, after, command):
         return verify_country_command(before, after, command)
     if isinstance(command, ResolvedControlCommand):
         return verify_control_command(before, after, command)
+    if isinstance(command, ResolvedEventCommand):
+        return verify_event_command(before, after, command)
     return False
 
 
@@ -73,4 +80,6 @@ def extended_payload(command, token):
         return native_country_payload(command, token)
     if isinstance(command, ResolvedControlCommand):
         return native_control_payload(command, token)
+    if isinstance(command, ResolvedEventCommand):
+        return native_event_payload(command, token)
     raise ValueError("Unsupported resolved native command")

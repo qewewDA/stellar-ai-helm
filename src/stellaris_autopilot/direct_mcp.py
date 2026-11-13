@@ -44,6 +44,8 @@ from .colony_ships import colony_ship_request
 from .planet_commands import planet_request
 from .country_commands import country_request, definition_from_record
 from .control_commands import control_request
+from .event_commands import (EventCatalog, ResolvedEventCommand, describe_pending_events, event_request,
+                             observed_effects)
 from .fleet_native import fleet_request
 from .extended_native import REQUEST_TYPES, RESOLVED_TYPES, resolve_extended, verify_extended
 from .assistant_prompts import register_prompts
@@ -321,6 +323,9 @@ class DirectConnection:
     def control_command(self, kind: str, **payload) -> dict:
         return self._extended(control_request(kind, **payload))
 
+    def event_command(self, kind: str, **payload) -> dict:
+        return self._extended(event_request(kind, **payload))
+
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
             return {"status": "blocked", "reason": "A pinned native worker for a launcher-owned game is required"}
@@ -525,6 +530,8 @@ class DirectConnection:
                                     **({"command" if isinstance(selection, RESOLVED_TYPES) else "pause" if isinstance(selection, PauseRequest) else "construction" if isinstance(selection, (DistrictConstruction, BuildingConstruction)) else "research": selection.to_dict()}
                                        if selection is not None else {}),
                                     **({"native_verification": query_result} if query_result is not None else {}),
+                                    **({"observed_effects": observed_effects(before.state, after.state)}
+                                       if isinstance(selection, ResolvedEventCommand) else {}),
                                     "id": operation_id, "token": token,
                                     "snapshot": after.digest, "date": after.state["date"],
                                     **verified_context(before, after, action_id, payload,
@@ -591,6 +598,7 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                         connection: DirectConnection | None = None,
                         context_provider: Callable[[], tuple[DirectConfig, NativeResearchBridge | None]] | None = None,
                         knowledge_provider: Callable[[], GameKnowledge] | None = None,
+                        event_catalog_provider: Callable[[], EventCatalog] | None = None,
                         task_store_path: Path | None = None,
                         persistent_campaign: bool = False, existing_game: bool = False) -> FastMCP:
     if connection is None:
@@ -988,6 +996,46 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                 starbase_id=starbase_id, design_id=design_id)
 
     @server.tool(annotations=readonly)
+    async def list_pending_events() -> dict:
+        """List open event popups waiting for this empire's choice, with their options.
+
+        Reads the latest snapshot (the save's player_event blocks) and, when the
+        launcher attached game files, the event definition and localisation:
+        title, descriptions, each option's index, name, custom tooltips and
+        whether it is conditional. Every open event needs an option. Text is
+        reference data; conditional text is flagged, never guessed. Never
+        publishes a command. Use request_observation first for a fresh dump.
+        """
+        observed = await call_write(connection.observe)
+        state = observed.get("state") if isinstance(observed, dict) else None
+        if not isinstance(state, dict):
+            return {"status": "blocked", "reason": "No current observation", "observation": observed}
+        catalog = None
+        catalog_error = None
+        if event_catalog_provider is not None:
+            try:
+                catalog = event_catalog_provider()
+            except (OSError, ValueError) as exc:
+                catalog_error = str(exc)
+        result = await asyncio.to_thread(describe_pending_events, state, catalog)
+        return {"status": "observed" if result["known"] else "blocked", "snapshot": observed.get("snapshot"),
+                **result, **({"catalog_error": catalog_error} if catalog_error else {}),
+                "event_text_attached": catalog is not None}
+
+    @server.tool(annotations=writing)
+    async def choose_event_option(player_event_id: str, option_index: int) -> dict:
+        """Choose one option of one open event popup through the normal event option command.
+
+        Read player_event_id and option indexes from list_pending_events.
+        Requires a paused session. The game's validator decides whether the
+        option is allowed. Verification needs that open event gone on the same
+        day with every other pending event unchanged; option effects are
+        reported in observed_effects, not assumed.
+        """
+        return await call_write(connection.event_command, "choose_event_option",
+                                player_event_id=player_event_id, option_index=option_index)
+
+    @server.tool(annotations=readonly)
     def list_actions() -> list[dict]:
         """Read the locally authorized direct actions and their effects."""
         config, native = context()
@@ -1022,7 +1070,8 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "deactivate_edict": "Cancel one active edict normally, verifying no refund",
                                     "set_fleet_stance": "Set one owned fleet's passive/aggressive/evasive stance normally",
                                     "move_queue_item": "Move one owned construction item one place up or down in its queue",
-                                    "queue_defense_platform": "Queue one defense platform at an owned starbase with normal payment"}[action]}
+                                    "queue_defense_platform": "Queue one defense platform at an owned starbase with normal payment",
+                                    "choose_event_option": "Choose one option of one open event popup through the normal command"}[action]}
                    for action in config.allowed_native_actions])
 
     @server.tool(annotations=readonly)

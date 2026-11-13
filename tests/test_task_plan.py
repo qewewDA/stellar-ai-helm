@@ -175,3 +175,17 @@ def test_dispatch_uses_existing_typed_api_and_maps_definition_fields(step, expec
     connection = Calls()
     assert dispatch_step(connection, copy.deepcopy(step)) == "existing-api-result"
     assert connection.calls == [expected]
+
+
+def test_event_option_step_is_typed_and_dispatched_to_the_event_command():
+    step = {"kind": "choose_event_option", "player_event_id": "12", "option_index": 1}
+    normalized, _ = normalize_plan([step])
+    assert normalized == [step]
+    connection = Calls()
+    assert dispatch_step(connection, copy.deepcopy(step)) == "existing-api-result"
+    assert connection.calls == [("event_command", ("choose_event_option",),
+                                 {"player_event_id": "12", "option_index": 1})]
+    for bad in ({**step, "option_index": "1"}, {**step, "option_index": 64}, {**step, "player_event_id": "012"},
+                {**step, "script": "x"}):
+        with pytest.raises(ValueError):
+            normalize_plan([bad])

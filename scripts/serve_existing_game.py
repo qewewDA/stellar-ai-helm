@@ -9,8 +9,23 @@ import sys
 from mcp.types import ToolAnnotations
 from pydantic import StrictBool
 
+# Serve this checkout's package, not whichever checkout the venv has installed.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 from stellaris_autopilot.direct_mcp import build_direct_server
+from stellaris_autopilot.event_commands import EventCatalog
 from stellaris_autopilot.existing_session import ExistingGameSession
+
+
+def _event_catalog(game_dir, user_dir):
+    """One lazy catalog; game files are read only when events are listed."""
+    catalog = []
+
+    def provide():
+        if not catalog:
+            catalog.append(EventCatalog.for_user_dir(game_dir, user_dir))
+        return catalog[0]
+    return provide
 
 
 def main():
@@ -32,6 +47,7 @@ def main():
                                      context_provider=session.context,
                                      task_store_path=args.state_dir / "tasks.sqlite",
                                      knowledge_provider=session.knowledge if args.knowledge_bundle is not None else None,
+                                     event_catalog_provider=_event_catalog(args.game_dir, args.user_dir),
                                      existing_game=True)
         readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
         writing = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)

@@ -9,6 +9,7 @@ import zipfile
 from .pdx import PDXError, PDXNode, loads
 from .country_commands import observe_country_controls
 from .control_commands import observe_control_state
+from .event_commands import observe_pending_events
 
 
 class SaveError(ValueError):
@@ -930,6 +931,7 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
         'shipbuilding': observe_shipyards(root, country_id, fleets) if fleets_known else {},
         'space': observe_space(root, country_id),
         'control_state': observe_control_state(root, country_id, fleets, fleets_known),
+        'pending_events': observe_pending_events(root),
         'fleets': fleets,
         'planets': planets,
         'fleets_by_id': {fleet['id']: fleet for fleet in fleets},

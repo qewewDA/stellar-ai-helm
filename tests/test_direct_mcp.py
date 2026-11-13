@@ -99,9 +99,13 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "survey_planet", "build_station", "colonize_planet", "queue_colony_ship",
                           "set_policy", "activate_edict", "deactivate_edict",
                           "set_fleet_stance", "move_queue_item", "queue_defense_platform",
+                          "list_pending_events", "choose_event_option",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}
     assert tools["observe_empire"].annotations.readOnlyHint is True
+    assert tools["list_pending_events"].annotations.readOnlyHint is True
+    assert tools["choose_event_option"].annotations.readOnlyHint is False
+    assert set(tools["choose_event_option"].inputSchema["properties"]) == {"player_event_id", "option_index"}
     assert tools["probe_connection"].annotations.readOnlyHint is False
     assert tools["request_observation"].annotations.readOnlyHint is False
     assert set(tools["execute_action"].inputSchema["properties"]) == {"action_id"}
@@ -768,3 +772,46 @@ def test_control_tools_reject_malformed_values_before_observation(config_path, m
     except ToolError:
         return
     assert result["status"] == "blocked"
+
+
+class _EventConnection:
+    def __init__(self, state=None):
+        self.calls, self.state = [], state
+
+    def event_command(self, kind, **payload):
+        self.calls.append((kind, payload))
+        return {"status": "recorded"}
+
+    def observe(self):
+        return {"status": "observed", "snapshot": "s1", "state": self.state}
+
+
+def test_event_tools_expose_exact_arguments_and_pass_typed_payloads(config_path):
+    server = direct.build_direct_server(config_path)
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    assert set(tools["choose_event_option"].inputSchema["required"]) == {"player_event_id", "option_index"}
+    assert not tools["list_pending_events"].inputSchema.get("properties")
+    connection = _EventConnection()
+    server = direct.build_direct_server(config_path, connection=connection)
+    assert invoke(server, "choose_event_option", {"player_event_id": "12", "option_index": 1}) == {"status": "recorded"}
+    assert connection.calls == [("choose_event_option", {"player_event_id": "12", "option_index": 1})]
+
+
+def test_event_option_requires_a_launcher_owned_backend_before_observation(config_path, monkeypatch):
+    monkeypatch.setattr(direct, "DirectObserver", lambda *_: pytest.fail("A missing native backend read a snapshot"))
+    result = invoke(direct.build_direct_server(config_path), "choose_event_option",
+                    {"player_event_id": "12", "option_index": 0})
+    assert result["status"] == "blocked"
+    assert not direct._configuration(config_path).state_dir.exists()
+
+
+def test_list_pending_events_reads_the_snapshot_without_publishing(config_path):
+    pending = {"known": True, "selections": [], "by_id": {"12": {"id": "12", "event_id": "qs_test.1", "expired": False,
+                                                               "index": 0, "picture": None, "scope": None}}}
+    connection = _EventConnection({"date": "2207.01.11", "pending_events": pending})
+    result = invoke(direct.build_direct_server(config_path, connection=connection), "list_pending_events")
+    assert result["status"] == "observed" and result["snapshot"] == "s1" and result["event_text_attached"] is False
+    assert [event["player_event_id"] for event in result["events"]] == ["12"]
+    assert connection.calls == []
+    unknown = _EventConnection({"date": "2207.01.11", "pending_events": {"known": False}})
+    assert invoke(direct.build_direct_server(config_path, connection=unknown), "list_pending_events")["status"] == "blocked"

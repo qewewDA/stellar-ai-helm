@@ -15,7 +15,7 @@ SOURCES = ("native_research.js", "native_ship.js", "native_ship_colony.js",
 # Statically located in the 4.5.2 executable only (policy/edict, fleet stance,
 # queue priority and defense platform commands). The 4.5.3 translation keeps
 # exactly SOURCES, so it never maps these RVAs.
-LEGACY_ONLY_SOURCES = ("native_country.js", "native_control.js")
+LEGACY_ONLY_SOURCES = ("native_country.js", "native_control.js", "native_events.js")
 
 # Each entry was re-identified in the 4.5.3 executable; this is not a uniform shift.
 _RVA_453 = {

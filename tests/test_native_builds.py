@@ -379,7 +379,7 @@ def test_legacy_render_is_byte_identical_to_the_packaged_sources():
     rendered = _rendered(LEGACY)
     assert rendered == expected
     assert len(native_builds.SOURCES) == 5
-    assert native_builds.LEGACY_ONLY_SOURCES == ("native_country.js", "native_control.js")
+    assert native_builds.LEGACY_ONLY_SOURCES == ("native_country.js", "native_control.js", "native_events.js")
     assert "0x6d1b90" in rendered and "0x6d2a80" not in rendered
     assert GUARD_ERROR not in rendered and "rpc.exports.enqueue =" not in rendered
 
