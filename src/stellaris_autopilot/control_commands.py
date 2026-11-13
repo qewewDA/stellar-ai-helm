@@ -9,6 +9,8 @@ is never proof of success: verification needs exactly the intended change.
 Static evidence (4.5.2):
 * Fleet stance: switch_fleet_stance_command factory 0xa70c40 (vtable
   0x23b9e90, validate 0xa61f40, execute 0xa61ef0 -> setter 0xc74c60). The
+  setter also attaches a targetless aggressive_stance_fleet_order to an idle
+  fleet turned aggressive, and clears one when leaving aggressive. The
   fleet writer (0xc5d710, at 0xc5e260) omits stance 0 (passive) and writes
   ``fleet_stance=aggressive`` (1) or ``fleet_stance=evasive`` (2).
 * Queue priority: increase/decrease_once_buildable_priority factories
@@ -297,6 +299,33 @@ def _unchanged(before: dict, after: dict, *keys: str) -> bool:
     return all(before.get(key) == after.get(key) for key in keys)
 
 
+def _stance_order_follows(old, new, stance: str) -> bool:
+    """The setter's own order side effect (0xc74c60), and nothing else.
+
+    Becoming aggressive while idle without an order attaches a fresh targetless
+    ``aggressive_stance_fleet_order`` (0xceed50 via 0xc6b4f0). Leaving
+    aggressive clears exactly such an order (type 0x3509, via 0xc6ae80).
+    """
+    if new == old:
+        return True
+    if stance == "aggressive":
+        order = new.get("aggressive_stance_fleet_order") if isinstance(new, dict) and len(new) == 1 else None
+        return (old is None and isinstance(order, dict) and order.get("target") == _UNSET
+                and order.get("bombard_target") == _UNSET and order.get("commissioner") == _UNSET)
+    return new is None and isinstance(old, dict) and set(old) == {"aggressive_stance_fleet_order"}
+
+
+def _fleets_after_stance(before: dict, after: dict, fleet_id: str, stance: str) -> bool:
+    first, second = before.get("fleets_by_id"), after.get("fleets_by_id")
+    if not isinstance(first, dict) or not isinstance(second, dict) or set(first) != set(second):
+        return False
+    if any(first[key] != second[key] for key in first if key != fleet_id):
+        return False
+    old, new = dict(first[fleet_id]), dict(second[fleet_id])
+    old_order, new_order = old.pop("current_order", None), new.pop("current_order", None)
+    return old == new and _stance_order_follows(old_order, new_order, stance)
+
+
 def verify_control_command(before: dict, after: dict, command: ResolvedControlCommand) -> bool:
     """Require exactly one intended change on the same (paused) game day."""
     if type(command) is not ResolvedControlCommand:
@@ -313,7 +342,8 @@ def verify_control_command(before: dict, after: dict, command: ResolvedControlCo
             expected = {**stances_before, request.fleet_id: request.stance}
             return (stances_before.get(request.fleet_id) == command.current_stance
                     and stances_after == expected and orders_after == orders_before
-                    and _unchanged(before, after, "fleets_by_id", "construction", "shipbuilding")
+                    and _fleets_after_stance(before, after, request.fleet_id, request.stance)
+                    and _unchanged(before, after, "construction", "shipbuilding")
                     and _stockpiles(before) is not None and _stockpiles(after) == _stockpiles(before))
         if stances_after != stances_before:
             return False

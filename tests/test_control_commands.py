@@ -111,6 +111,38 @@ def test_stance_resolves_the_current_stance_and_verifies_only_that_change():
     assert verify_control_command(state, state, command) is False
 
 
+AGGRESSIVE_ORDER = {"aggressive_stance_fleet_order": {
+    "target": 4294967295, "bombard_target": 4294967295, "return_coordinate": {"target": {"type": 0, "id": 0}},
+    "can_reach": "yes", "order_id": 0, "commissioner": 4294967295}}
+
+
+def test_stance_allows_only_the_setters_own_aggressive_order_side_effect():
+    state = _state()
+    command = resolve_control_command(state, control_request("set_fleet_stance", fleet_id="3", stance="aggressive"))
+    after = copy.deepcopy(state)
+    after["control_state"]["fleet_stances"]["by_id"]["3"] = "aggressive"
+    after["fleets_by_id"]["3"]["current_order"] = copy.deepcopy(AGGRESSIVE_ORDER)
+    assert verify_control_command(state, after, command) is True
+    targeted = copy.deepcopy(after)
+    targeted["fleets_by_id"]["3"]["current_order"]["aggressive_stance_fleet_order"]["target"] = 7
+    assert verify_control_command(state, targeted, command) is False
+    other = copy.deepcopy(after)
+    other["fleets_by_id"]["3"]["current_order"] = {"move_fleet_order": {}}
+    assert verify_control_command(state, other, command) is False
+    moved = copy.deepcopy(after)
+    moved["fleets_by_id"]["6"]["current_order"] = copy.deepcopy(AGGRESSIVE_ORDER)
+    assert verify_control_command(state, moved, command) is False
+    # Leaving aggressive may clear exactly that order and nothing else.
+    leaving = copy.deepcopy(after)
+    passive = resolve_control_command(leaving, control_request("set_fleet_stance", fleet_id="3", stance="passive"))
+    cleared = copy.deepcopy(leaving)
+    cleared["control_state"]["fleet_stances"]["by_id"]["3"] = "passive"
+    del cleared["fleets_by_id"]["3"]["current_order"]
+    assert verify_control_command(leaving, cleared, passive) is True
+    cleared["fleets_by_id"]["3"]["name"] = "renamed"
+    assert verify_control_command(leaving, cleared, passive) is False
+
+
 @pytest.mark.parametrize("fleet_id,stance", [("3", "passive"), ("6", "aggressive"), ("99", "evasive")])
 def test_stance_rejects_same_stance_stations_and_unknown_fleets(fleet_id, stance):
     with pytest.raises(ValueError):
