@@ -204,6 +204,24 @@ def test_defense_platform_resolves_the_general_starbase_queue_and_verifies_exact
     assert verify_control_command(state, wrong, command) is False
 
 
+def test_paused_research_drift_does_not_hide_a_paid_platform_but_other_stockpiles_still_must_match():
+    # Live 2207.01.11: the paused game's dump moved research stockpiles
+    # around the enqueue while the date and every other stockpile held.
+    state = _state()
+    state["resources"].update(physics_research=1355.41277, society_research=1190.49277,
+                              engineering_research=1098.49277)
+    command = resolve_control_command(state, control_request("queue_defense_platform", starbase_id="0", design_id="3058"))
+    drifted = _platform_after(state)
+    drifted["resources"].update(physics_research=1388.65209, society_research=1217.43209,
+                                engineering_research=1125.43209)
+    assert verify_control_command(state, drifted, command) is True
+    drifted["resources"]["unity"] = drifted["resources"].get("unity", 0.0) + 1.0
+    assert verify_control_command(state, drifted, command) is False
+    missing = _platform_after(state)
+    del missing["resources"]["physics_research"]
+    assert verify_control_command(state, missing, command) is False
+
+
 def test_defense_platform_rejects_non_platform_designs():
     with pytest.raises(ValueError):
         resolve_control_command(_state(), control_request("queue_defense_platform", starbase_id="0", design_id="3057"))

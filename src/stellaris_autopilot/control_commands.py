@@ -289,9 +289,14 @@ def _stockpiles(state: dict) -> dict | None:
     if (not isinstance(resources, dict) or not resources
             or not all(type(value) in (int, float) and math.isfinite(value) for value in resources.values())):
         return None
-    return resources
+    # Research "stockpiles" are recomputed by the game while paused on the
+    # same date (live 2207.01.11: physics_research 1355.41 -> 1388.65 around a
+    # defense platform enqueue), so no control command can be judged by them.
+    # Their keys stay; every other stockpile must still match exactly.
+    return {key: None if key in _UNSTABLE_STOCKPILES else value for key, value in resources.items()}
 
 
+_UNSTABLE_STOCKPILES = frozenset({"physics_research", "society_research", "engineering_research"})
 _DATE = re.compile(r"[0-9]{4}\.[0-9]{2}\.[0-9]{2}\Z", re.ASCII)
 
 
