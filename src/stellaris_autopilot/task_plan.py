@@ -17,7 +17,7 @@ from .fleet_native import fleet_request
 from .control_commands import control_request
 from .country_commands import country_request
 from .event_commands import event_request
-from .diplomacy_commands import diplomacy_request
+from .diplomacy_commands import DIPLOMACY_KINDS, diplomacy_request
 
 
 class _Step(BaseModel):
@@ -139,7 +139,9 @@ class EventOptionStep(_Step):
 
 
 class BordersStep(_Step):
-    kind: Literal["close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy"]
+    kind: Literal["close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
+                  "harm_relations", "improve_relations", "propose_embassy", "propose_non_aggression_pact",
+                  "propose_research_agreement", "propose_commercial_pact", "propose_migration_pact"]
     target_country_id: StrictStr
 
 
@@ -204,7 +206,7 @@ def dispatch_step(connection, step: dict, definitions=None):
         return connection.control_command(kind, **args)
     if kind == "choose_event_option":
         return connection.event_command(kind, **args)
-    if kind in {"close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy"}:
+    if kind in DIPLOMACY_KINDS:
         return connection.diplomacy_command(kind, **args)
     if kind.startswith("fleet_"):
         return connection.issue_order(step)

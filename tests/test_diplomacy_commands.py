@@ -3,7 +3,7 @@ import copy
 import pytest
 
 from stellaris_autopilot.diplomacy_commands import (
-    diplomacy_request, native_diplomacy_payload, observe_diplomacy, resolve_diplomacy_command,
+    diplomacy_request, native_diplomacy_payload, observe_diplomacy, proposal_outcome, resolve_diplomacy_command,
     verify_diplomacy_command,
 )
 from stellaris_autopilot.extended_native import extended_payload, resolve_extended, verify_extended
@@ -176,3 +176,128 @@ def test_insult_verification_needs_a_new_insult_opinion_and_no_change_of_ours():
     twice = resolve_diplomacy_command(already, diplomacy_request("insult", target_country_id="16777222"))
     assert verify_diplomacy_command(already, already, twice) is False
     assert verify_diplomacy_command(already, _state(_text(theirs=modifier + " " + modifier)), twice) is True
+
+
+ENVOY_SAVE = SAVE + """
+leaders={
+  301989890={ country=0 class="envoy" ENVOY_A }
+  301989891={ country=0 class="envoy" ENVOY_B }
+  301989892={ country=0 class="scientist" location={ type=ship assignment=survey id=5 } }
+  301989893={ country=16777222 class="envoy" location={ type=country assignment=harm_relations id=0 } }
+}
+"""
+
+
+def _envoy_state(a="", b="", ours="", incoming="", date="2209.02.06"):
+    text = ENVOY_SAVE.replace("ENVOY_A", a).replace("ENVOY_B", b).replace("OURS", ours)
+    text = text.replace("THEIRS trust=0 } } }", "trust=0 } } " + incoming + " }")
+    assert "THEIRS" not in text and "OURS" not in text
+    return _state(text, date=date)
+
+
+HARM = "location={ type=envoy_location_country assignment=harm_relations id=16777222 position=0 }"
+
+
+def _pending(action="action_embassy", actor="0", recipient="16777222"):
+    return ("incoming_actions={ { %s={ type=propose actor=%s recipient=%s id=77309411330 waiting_for_vote=no "
+            'timeout="2209.08.05" num_favors=0 } } }' % (action, actor, recipient))
+
+
+def test_observation_reads_our_envoys_pacts_and_pending_proposals():
+    state = _envoy_state(b=HARM, ours="commercial_pact=yes", incoming=_pending())
+    envoys = state["diplomacy"]["envoys"]
+    assert envoys["known"] is True and set(envoys["by_id"]) == {"301989890", "301989891"}
+    assert envoys["by_id"]["301989890"] == {"id": "301989890", "location": None, "idle": True}
+    assert envoys["by_id"]["301989891"]["location"] == {"type": "envoy_location_country",
+                                                         "assignment": "harm_relations", "id": "16777222"}
+    entry = state["diplomacy"]["by_country"]["16777222"]
+    assert entry["pacts"]["commercial_pact"] is True and entry["pacts"]["research_agreement"] is False
+    assert entry["our_proposals"] == [{"action": "action_embassy", "type": "propose", "recipient": "16777222",
+                                       "id": "77309411330", "timeout": "2209.08.05"}]
+    others = _envoy_state(incoming=_pending(actor="65"))
+    assert others["diplomacy"]["by_country"]["16777222"]["our_proposals"] == []
+    assert _state()["diplomacy"]["envoys"] == {"known": False, "by_id": {}}
+
+
+@pytest.mark.parametrize("kind", ["harm_relations", "improve_relations", "propose_embassy",
+                                  "propose_non_aggression_pact", "propose_research_agreement",
+                                  "propose_commercial_pact", "propose_migration_pact"])
+def test_new_kinds_produce_the_fixed_native_payload(kind):
+    command = resolve_diplomacy_command(_envoy_state(), diplomacy_request(kind, target_country_id="16777222"))
+    assert native_diplomacy_payload(command, "b" * 32) == {"kind": kind, "country_id": "0", "token": "b" * 32,
+                                                           "target_country_id": "16777222"}
+
+
+def test_envoy_missions_need_an_idle_envoy_and_no_duplicate_mission():
+    harm = diplomacy_request("harm_relations", target_country_id="16777222")
+    with pytest.raises(ValueError, match="envoys are not exactly observable"):
+        resolve_diplomacy_command(_state(), harm)
+    with pytest.raises(ValueError, match="already has that mission"):
+        resolve_diplomacy_command(_envoy_state(b=HARM), harm)
+    busy = "location={ type=envoy_location_country assignment=improve_relations id=73 position=0 }"
+    with pytest.raises(ValueError, match="No idle envoy"):
+        resolve_diplomacy_command(_envoy_state(a=busy, b=busy), harm)
+    resolve_diplomacy_command(_envoy_state(a=busy, b="location={ type=0 assignment=none id=0 }"), harm)
+
+
+def test_envoy_verification_needs_exactly_one_idle_envoy_on_that_mission():
+    before = _envoy_state()
+    harm = resolve_diplomacy_command(before, diplomacy_request("harm_relations", target_country_id="16777222"))
+    assert verify_diplomacy_command(before, _envoy_state(b=HARM), harm) is True
+    assert verify_diplomacy_command(before, before, harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(a=HARM, b=HARM), harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(b=HARM.replace("16777222", "73")), harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(b=HARM.replace("harm_", "improve_")), harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(b=HARM, ours="is_rival=yes"), harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(b=HARM, date="2209.02.07"), harm) is False
+    improve = resolve_diplomacy_command(before, diplomacy_request("improve_relations", target_country_id="16777222"))
+    assert verify_diplomacy_command(before, _envoy_state(b=HARM.replace("harm_", "improve_")), improve) is True
+    # Other actions must leave our envoys alone.
+    close = resolve_diplomacy_command(before, diplomacy_request("close_borders", target_country_id="16777222"))
+    assert verify_diplomacy_command(before, _envoy_state(b=HARM, ours="closed_borders=yes"), close) is False
+    assert verify_diplomacy_command(before, _envoy_state(ours="closed_borders=yes"), close) is True
+
+
+def test_proposals_need_communications_no_agreement_and_nothing_pending():
+    state = _envoy_state()
+    with pytest.raises(ValueError, match="communications"):
+        resolve_diplomacy_command(state, diplomacy_request("propose_embassy", target_country_id="8"))
+    with pytest.raises(ValueError, match="already exists"):
+        resolve_diplomacy_command(_envoy_state(ours="embassy=yes"),
+                                  diplomacy_request("propose_embassy", target_country_id="16777222"))
+    with pytest.raises(ValueError, match="already exists"):
+        resolve_diplomacy_command(_envoy_state(ours="research_agreement=yes"),
+                                  diplomacy_request("propose_research_agreement", target_country_id="16777222"))
+    with pytest.raises(ValueError, match="already pending"):
+        resolve_diplomacy_command(_envoy_state(incoming=_pending()),
+                                  diplomacy_request("propose_embassy", target_country_id="16777222"))
+    resolve_diplomacy_command(_envoy_state(incoming=_pending()),
+                              diplomacy_request("propose_non_aggression_pact", target_country_id="16777222"))
+
+
+def test_proposal_verification_reports_accepted_or_pending_only():
+    before = _envoy_state()
+    embassy = resolve_diplomacy_command(before, diplomacy_request("propose_embassy", target_country_id="16777222"))
+    pending = _envoy_state(incoming=_pending())
+    assert verify_diplomacy_command(before, pending, embassy) is True
+    assert proposal_outcome(before, pending, embassy) == "pending"
+    accepted = _envoy_state(ours="embassy=yes")
+    assert verify_diplomacy_command(before, accepted, embassy) is True
+    assert proposal_outcome(before, accepted, embassy) == "accepted"
+    assert verify_diplomacy_command(before, before, embassy) is False
+    assert proposal_outcome(before, before, embassy) is None
+    assert verify_diplomacy_command(before, _envoy_state(incoming=_pending("action_form_research_agreement")),
+                                    embassy) is False
+    assert verify_diplomacy_command(before, _envoy_state(incoming=_pending(recipient="73")), embassy) is False
+    assert verify_diplomacy_command(before, _envoy_state(ours="embassy=yes", incoming=_pending()), embassy) is False
+    assert verify_diplomacy_command(before, _envoy_state(ours="embassy=yes closed_borders=yes"), embassy) is False
+    assert verify_diplomacy_command(before, _envoy_state(incoming=_pending(), date="2209.02.07"), embassy) is False
+    nap = resolve_diplomacy_command(before, diplomacy_request("propose_non_aggression_pact",
+                                                              target_country_id="16777222"))
+    assert verify_diplomacy_command(before, _envoy_state(ours="non_aggression_pledge=yes"), nap) is True
+    assert verify_diplomacy_command(before, _envoy_state(ours="commercial_pact=yes"), nap) is False
+    assert verify_diplomacy_command(before, _envoy_state(ours="embassy=yes"), nap) is False
+    # A pending proposal of ours must not appear or vanish under unrelated actions.
+    close = resolve_diplomacy_command(before, diplomacy_request("close_borders", target_country_id="16777222"))
+    assert verify_diplomacy_command(before, _envoy_state(ours="closed_borders=yes", incoming=_pending()),
+                                    close) is False

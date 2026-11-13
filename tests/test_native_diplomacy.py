@@ -42,7 +42,9 @@ const destroyed = [];
 // Action vtable for close borders with the reviewed sender/receiver setters.
 const CLOSE = B + 0x23aebc8, OPEN = B + 0x23aed70, PROPOSE = B + 0x23b4138;
 const VTABLES = {0x3695: CLOSE, 0x3696: OPEN, 0x3385: B + 0x23ae878, 0x3384: B + 0x23ae6d0,
-    0x3524: B + 0x23aea20, 0x3525: B + 0x23aef18};
+    0x3524: B + 0x23aea20, 0x3525: B + 0x23aef18, 0x351e: B + 0x23b1550, 0x351d: B + 0x23b0d08,
+    0x3383: B + 0x23af0c0, 0x40da: B + 0x23afe20, 0x2a2d: B + 0x23b04c0, 0x3cb4: B + 0x23b0170,
+    0x40ef: B + 0x23af780};
 Object.values(VTABLES).forEach(vt => { put(vt + 0xa8, B + 0x940120); put(vt + 0xb0, B + 0x940140); });
 function NativeFunction(address) {
     const rva = address.value - B;
@@ -78,7 +80,9 @@ put(0x11000 + 7 * 0x10 + 8, 0);
 put(0x70000 + 0x5c, scenario === 'other_human' ? 4 : 0);
 const token = 'a'.repeat(32);
 const kinds = {open: 'open_borders', insult: 'insult', rival: 'make_rival', end_rival: 'end_rivalry',
-    recall: 'recall_embassy'};
+    recall: 'recall_embassy', harm: 'harm_relations', improve: 'improve_relations',
+    embassy: 'propose_embassy', nap: 'propose_non_aggression_pact', research: 'propose_research_agreement',
+    commercial: 'propose_commercial_pact', migration: 'propose_migration_pact'};
 const request = {kind: kinds[scenario] || 'close_borders', country_id: '0', token,
     target_country_id: '16777224'};
 if (scenario === 'index_only') request.target_country_id = '8';
@@ -123,6 +127,9 @@ pytestmark = pytest.mark.skipif(NODE is None, reason="Native JavaScript adapter 
 @pytest.mark.parametrize("scenario,token,vtable", [
     ("ok", 0x3695, 0x23aebc8), ("open", 0x3696, 0x23aed70), ("insult", 0x3385, 0x23ae878),
     ("rival", 0x3384, 0x23ae6d0), ("end_rival", 0x3524, 0x23aea20), ("recall", 0x3525, 0x23aef18),
+    ("harm", 0x351e, 0x23b1550), ("improve", 0x351d, 0x23b0d08), ("embassy", 0x3383, 0x23af0c0),
+    ("nap", 0x40da, 0x23afe20), ("research", 0x2a2d, 0x23b04c0), ("commercial", 0x3cb4, 0x23b0170),
+    ("migration", 0x40ef, 0x23af780),
 ])
 def test_proposal_owns_one_action_with_player_sender_and_exact_receiver(scenario, token, vtable):
     result = _run(scenario)

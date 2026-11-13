@@ -44,7 +44,7 @@ from .colony_ships import colony_ship_request
 from .planet_commands import planet_request
 from .country_commands import country_request, definition_from_record
 from .control_commands import control_request
-from .diplomacy_commands import diplomacy_request
+from .diplomacy_commands import PROPOSALS, ResolvedDiplomacyCommand, diplomacy_request, proposal_outcome
 from .intent_plan import propose_plan
 from .event_commands import (EventCatalog, ResolvedEventCommand, describe_pending_events, event_request,
                              observed_effects)
@@ -584,6 +584,9 @@ class DirectConnection:
                                     **({"native_verification": query_result} if query_result is not None else {}),
                                     **({"observed_effects": observed_effects(before.state, after.state)}
                                        if isinstance(selection, ResolvedEventCommand) else {}),
+                                    **({"proposal_outcome": proposal_outcome(before.state, after.state, selection)}
+                                       if isinstance(selection, ResolvedDiplomacyCommand)
+                                       and selection.kind in PROPOSALS else {}),
                                     "id": operation_id, "token": token,
                                     "snapshot": after.digest, "date": after.state["date"],
                                     **verified_context(before, after, action_id, payload,
@@ -1146,7 +1149,16 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         diplomacy = state.get("diplomacy") if isinstance(state, dict) else None
         if not isinstance(diplomacy, dict) or diplomacy.get("known") is not True:
             return {"status": "blocked", "reason": "Diplomatic relations are not exactly observable in this snapshot"}
+        envoys = diplomacy.get("envoys") if isinstance(diplomacy.get("envoys"), dict) else {}
         return {"status": "observed", "snapshot": observed.get("snapshot"), "date": state.get("date"),
+                "envoys": {"known": envoys.get("known") is True,
+                           "idle": sum(1 for envoy in (envoys.get("by_id") or {}).values() if envoy.get("idle") is True),
+                           "assigned": [{"envoy_id": envoy["id"],
+                                         "type": (envoy.get("location") or {}).get("type"),
+                                         "assignment": (envoy.get("location") or {}).get("assignment"),
+                                         "target_id": (envoy.get("location") or {}).get("id")}
+                                        for envoy in (envoys.get("by_id") or {}).values()
+                                        if envoy.get("idle") is not True]},
                 "relations": [{**{key: value for key, value in relation.items() if key not in {"relation", "their_side"}},
                                "their_opinion_modifiers": (relation.get("their_side") or {}).get("modifiers")}
                               for _, relation in sorted(diplomacy["by_country"].items(), key=lambda item: int(item[0]))]}
@@ -1201,11 +1213,50 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
     async def recall_embassy(target_country_id: str) -> dict:
         """Recall our embassy from one country through the normal proposal command.
 
-        Unilateral (auto-accepted). Establishing an embassy needs the recipient's
-        acceptance and is not offered. Verified when our relation loses embassy on
+        Unilateral (auto-accepted). Establishing one is propose_diplomacy(embassy).
+        Verified when our relation loses embassy on
         the same paused day and nothing else of ours changed.
         """
         return await call_write(connection.diplomacy_command, "recall_embassy", target_country_id=target_country_id)
+
+    @server.tool(annotations=writing)
+    async def harm_relations(target_country_id: str) -> dict:
+        """Send one idle envoy of ours to harm relations with one contacted country.
+
+        Auto-accepted envoy mission through the normal proposal command; the game's
+        validator decides. While it lasts the game allows insult and make_rival
+        against that country. Verified when exactly one idle envoy of ours gains
+        assignment harm_relations at that country on the same paused day and
+        nothing else of ours changed.
+        """
+        return await call_write(connection.diplomacy_command, "harm_relations", target_country_id=target_country_id)
+
+    @server.tool(annotations=writing)
+    async def improve_relations(target_country_id: str) -> dict:
+        """Send one idle envoy of ours to improve relations with one contacted country.
+
+        Same rules as harm_relations with assignment improve_relations.
+        """
+        return await call_write(connection.diplomacy_command, "improve_relations", target_country_id=target_country_id)
+
+    @server.tool(annotations=writing)
+    async def propose_diplomacy(target_country_id: str, proposal: str) -> dict:
+        """Propose an agreement the recipient must accept: embassy, non_aggression_pact,
+        research_agreement, commercial_pact or migration_pact.
+
+        Submitted once through the normal proposal command; the game's validator
+        decides whether it may be proposed and returns its reason otherwise. The
+        result's proposal_outcome is "accepted" (our relation gained the agreement)
+        or "pending" (the recipient's incoming_actions holds exactly our proposal;
+        its AI answers later, within 180 days). A decline is later observed in
+        list_diplomacy as the pending entry gone; it is never proposed again
+        automatically.
+        """
+        kind = "propose_" + proposal if isinstance(proposal, str) else ""
+        if kind not in PROPOSALS:
+            return {"status": "blocked", "reason": "Unknown proposal; choose one of "
+                    + ", ".join(sorted(name.removeprefix("propose_") for name in PROPOSALS))}
+        return await call_write(connection.diplomacy_command, kind, target_country_id=target_country_id)
 
     @server.tool(annotations=readonly)
     def list_actions() -> list[dict]:
@@ -1253,7 +1304,14 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "insult": "Insult one contacted country (unilateral diplomatic action)",
                                     "make_rival": "Declare one contacted country our rival (unilateral diplomatic action)",
                                     "end_rivalry": "End our rivalry with one country (unilateral diplomatic action)",
-                                    "recall_embassy": "Recall our embassy from one country (unilateral diplomatic action)"}[action]}
+                                    "recall_embassy": "Recall our embassy from one country (unilateral diplomatic action)",
+                                    "harm_relations": "Send one idle envoy to harm relations with one country",
+                                    "improve_relations": "Send one idle envoy to improve relations with one country",
+                                    "propose_embassy": "Propose an embassy (recipient decides; accepted or pending)",
+                                    "propose_non_aggression_pact": "Propose a non-aggression pact (recipient decides)",
+                                    "propose_research_agreement": "Propose a research agreement (recipient decides)",
+                                    "propose_commercial_pact": "Propose a commercial pact (recipient decides)",
+                                    "propose_migration_pact": "Propose a migration pact (recipient decides)"}[action]}
                    for action in config.allowed_native_actions])
 
     @server.tool(annotations=readonly)

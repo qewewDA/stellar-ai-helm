@@ -101,6 +101,7 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "set_fleet_stance", "move_queue_item", "queue_defense_platform",
                           "list_pending_events", "choose_event_option",
                           "list_diplomacy", "close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
+                          "harm_relations", "improve_relations", "propose_diplomacy",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
                           "plan_intent",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}
@@ -134,6 +135,9 @@ EXTENDED_ARGUMENTS = [
     ("make_rival", {"target_country_id": "16777222"}),
     ("end_rivalry", {"target_country_id": "16777222"}),
     ("recall_embassy", {"target_country_id": "16777222"}),
+    ("harm_relations", {"target_country_id": "16777222"}),
+    ("improve_relations", {"target_country_id": "16777222"}),
+    ("propose_diplomacy", {"target_country_id": "16777222", "proposal": "embassy"}),
 ]
 
 
@@ -892,6 +896,29 @@ def test_border_tools_pass_typed_payloads_and_list_diplomacy_never_publishes(con
                                 ("open_borders", {"target_country_id": "73"})]
     unknown = _DiplomacyConnection({"date": "2209.02.06", "diplomacy": {"known": False}})
     assert invoke(direct.build_direct_server(config_path, connection=unknown), "list_diplomacy")["status"] == "blocked"
+
+
+def test_envoy_and_proposal_tools_map_to_fixed_kinds(config_path):
+    connection = _DiplomacyConnection({"date": "2209.02.06", "country_id": "0", "diplomacy": {
+        "known": True, "by_country": {}, "envoys": {"known": True, "by_id": {
+            "5": {"id": "5", "location": None, "idle": True},
+            "6": {"id": "6", "location": {"type": "country", "assignment": "harm_relations", "id": "73"},
+                  "idle": False}}}}})
+    server = direct.build_direct_server(config_path, connection=connection)
+    listed = invoke(server, "list_diplomacy")
+    assert listed["envoys"] == {"known": True, "idle": 1,
+                                "assigned": [{"envoy_id": "6", "type": "country", "assignment": "harm_relations",
+                                              "target_id": "73"}]}
+    assert invoke(server, "harm_relations", {"target_country_id": "73"}) == {"status": "recorded"}
+    assert invoke(server, "improve_relations", {"target_country_id": "73"}) == {"status": "recorded"}
+    for proposal in ("embassy", "non_aggression_pact", "research_agreement", "commercial_pact", "migration_pact"):
+        assert invoke(server, "propose_diplomacy", {"target_country_id": "73", "proposal": proposal}) == {
+            "status": "recorded"}
+    blocked = invoke(server, "propose_diplomacy", {"target_country_id": "73", "proposal": "declare_war"})
+    assert blocked["status"] == "blocked" and "embassy" in blocked["reason"]
+    assert [kind for kind, _ in connection.calls] == [
+        "harm_relations", "improve_relations", "propose_embassy", "propose_non_aggression_pact",
+        "propose_research_agreement", "propose_commercial_pact", "propose_migration_pact"]
 
 
 def _relations(**relations):

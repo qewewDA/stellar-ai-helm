@@ -53,7 +53,9 @@ NATIVE_ACTIONS = frozenset({"select_research", "queue_district", "queue_building
                             "set_policy", "activate_edict", "deactivate_edict",
                             "set_fleet_stance", "move_queue_item", "queue_defense_platform",
                             "choose_event_option", "close_borders", "open_borders",
-                            "insult", "make_rival", "end_rivalry", "recall_embassy"})
+                            "insult", "make_rival", "end_rivalry", "recall_embassy",
+                            "harm_relations", "improve_relations", "propose_embassy", "propose_non_aggression_pact",
+                            "propose_research_agreement", "propose_commercial_pact", "propose_migration_pact"})
 _TOKEN = re.compile(r"[0-9a-f]{32}", re.ASCII)
 _COUNTRY = re.compile(r"[0-9]{1,10}", re.ASCII)
 

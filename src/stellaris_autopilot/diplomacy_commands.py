@@ -25,6 +25,25 @@ on the same paused day and nothing else of ours changes, apart from
 ``diplo_action_dates`` bookkeeping and, for rivalry, ``rival_date``. An
 insult changes no flag of ours; it must add an ``opinion_insult`` modifier
 to the target's opinion of us.
+
+Envoy missions (``action_harm_relation`` / ``action_improve_relation``) are
+auto-accepted with ``require_envoy = yes``: verified when exactly one of our
+idle envoys (``leaders`` entries with ``country=0 class="envoy"``) gains a
+``location`` with ``assignment=harm_relations|improve_relations`` and
+``id=<target>``; nothing else of ours changes.
+
+Proposals that need the recipient's acceptance (embassy, non-aggression
+pact, research agreement, commercial pact, migration pact) use the same
+proposal command. The AI recipient decides later: a pending proposal is
+saved in the recipient's ``incoming_actions`` as ``action_x = { type=propose
+actor=0 recipient=<target> id=... timeout=<date> }`` (seen for AI-to-AI
+embassy proposals in the 2210.02.05 dump; ``AUTO_DECLINE_DIPLOMACY_DAYS``
+180). Verified as ``pending`` when exactly that entry appears, or as
+``accepted`` when our relation gains the pact flag (``embassy``,
+``non_aggression_pledge``, ``research_agreement``, ``commercial_pact``,
+``migration_access``, per relation writer 0x66a7d0). A later decline is
+observed as the pending entry gone with the flag still unset; it is never
+proposed again automatically.
 """
 from __future__ import annotations
 
@@ -44,7 +63,19 @@ _FLAG_ACTIONS = {
     "recall_embassy": ("embassy", True, False, frozenset()),
 }
 INSULT_MODIFIER = "opinion_insult"
-DIPLOMACY_KINDS = frozenset(_FLAG_ACTIONS) | {"insult"}
+# kind -> envoy assignment written to the leader's location
+ENVOY_MISSIONS = {"harm_relations": "harm_relations", "improve_relations": "improve_relations"}
+# kind -> (game action key, our relation flag set on acceptance)
+PROPOSALS = {
+    "propose_embassy": ("action_embassy", "embassy"),
+    "propose_non_aggression_pact": ("action_form_non_aggression_pact", "non_aggression_pledge"),
+    "propose_research_agreement": ("action_form_research_agreement", "research_agreement"),
+    "propose_commercial_pact": ("action_form_commercial_pact", "commercial_pact"),
+    "propose_migration_pact": ("action_form_migration_pact", "migration_access"),
+}
+PACT_FLAGS = ("non_aggression_pledge", "research_agreement", "commercial_pact", "migration_access",
+              "defensive_pact", "alliance")
+DIPLOMACY_KINDS = frozenset(_FLAG_ACTIONS) | {"insult"} | frozenset(ENVOY_MISSIONS) | frozenset(PROPOSALS)
 _FLAGS = ("contact", "communications", "hostile", "closed_borders", "is_rival", "embassy")
 _DATE = re.compile(r"\d{4}\.\d{2}\.\d{2}\Z", re.ASCII)
 _BOOKKEEPING = frozenset({"diplo_action_dates"})
@@ -105,6 +136,70 @@ def _their_side(countries: PDXNode, other: str, us: str) -> dict:
             "modifiers": sorted(modifiers), "relation": _canonical(relation) if relation is not None else None}
 
 
+def _pacts(relation: PDXNode) -> dict:
+    """Pact flags on our side; a malformed value is reported as None for that pact only."""
+    found = {}
+    for name in PACT_FLAGS:
+        values = relation.get_all(name)
+        found[name] = (False if not values else None if len(values) != 1 or not isinstance(values[0], str)
+                       or values[0] not in {"yes", "no"} else values[0] == "yes")
+    return found
+
+
+def _scalar(node: PDXNode, key: str) -> str | None:
+    values = node.get_all(key)
+    if len(values) != 1 or isinstance(values[0], (PDXNode, bool)) or values[0] is None:
+        return None
+    return str(values[0])
+
+
+def _our_proposals(country: PDXNode, us: str) -> list | None:
+    """Pending proposals from us in one country's ``incoming_actions``; None when unreadable."""
+    blocks = country.get_all("incoming_actions")
+    if not blocks:
+        return []
+    if len(blocks) != 1 or not isinstance(blocks[0], PDXNode):
+        return None
+    found = []
+    for item in blocks[0].values():
+        if not isinstance(item, PDXNode):
+            return None
+        for action, body in item.items():
+            if not isinstance(body, PDXNode):
+                return None
+            if _scalar(body, "actor") != us:
+                continue
+            found.append({"action": action, "type": _scalar(body, "type"), "recipient": _scalar(body, "recipient"),
+                          "id": _scalar(body, "id"), "timeout": _scalar(body, "timeout")})
+    return sorted(found, key=lambda entry: (entry["action"], str(entry["id"])))
+
+
+def observe_envoys(root: PDXNode, country_id: str = "0") -> dict:
+    """Our envoys and their current assignment, keyed by leader id."""
+    result = {"known": False, "by_id": {}}
+    leaders = root.get_all("leaders") if isinstance(root, PDXNode) else []
+    if len(leaders) != 1 or not isinstance(leaders[0], PDXNode):
+        return result
+    found = {}
+    for key, leader in leaders[0].items():
+        if not isinstance(leader, PDXNode) or _scalar(leader, "country") != country_id:
+            continue
+        if _scalar(leader, "class") != "envoy":
+            continue
+        if key in found or not re.fullmatch(r"0|[1-9][0-9]{0,9}", key):
+            return result
+        locations = leader.get_all("location")
+        if len(locations) > 1 or (locations and not isinstance(locations[0], PDXNode)):
+            return result
+        location = None
+        if locations:
+            location = {name: _scalar(locations[0], name) for name in ("type", "assignment", "id")}
+        found[key] = {"id": key, "location": location,
+                      "idle": location is None or location.get("assignment") in {None, "none"}}
+    result.update(known=True, by_id=found)
+    return result
+
+
 def observe_diplomacy(root: PDXNode, country_id: str = "0") -> dict:
     """Our side of every relation, keyed by the other country's id (its full handle)."""
     result = {"known": False, "by_country": {}}
@@ -123,10 +218,14 @@ def observe_diplomacy(root: PDXNode, country_id: str = "0") -> dict:
         if any(value is None for value in flags.values()):
             return result
         their = _their_side(countries[0], key, country_id)
+        others = countries[0].get_all(key)
+        proposals = (_our_proposals(others[0], country_id)
+                     if len(others) == 1 and isinstance(others[0], PDXNode) else [])
         found[key] = {"country": key, "country_type": their.get("country_type"), **flags,
+                      "pacts": _pacts(relation), "our_proposals": proposals,
                       "relation": _canonical(relation),
                       "their_side": {name: value for name, value in their.items() if name != "country_type"}}
-    result.update(known=True, by_country=found)
+    result.update(known=True, by_country=found, envoys=observe_envoys(root, country_id))
     return result
 
 
@@ -183,12 +282,38 @@ _ALREADY = {"close_borders": "Our borders are already closed to that country",
             "recall_embassy": "We have no embassy with that country"}
 
 
+def _envoys(state: dict) -> dict:
+    envoys = state.get("diplomacy", {}).get("envoys")
+    if not isinstance(envoys, dict) or envoys.get("known") is not True or not isinstance(envoys.get("by_id"), dict):
+        raise ValueError("Our envoys are not exactly observable in this snapshot")
+    return envoys["by_id"]
+
+
 def resolve_diplomacy_command(state: dict, request: DiplomacyRequest) -> ResolvedDiplomacyCommand:
     request = _again(request)
     relation = _observed(state).get(request.target_country_id)
     if not isinstance(relation, dict) or relation.get("contact") is not True:
         raise ValueError("Select a country we have contact with")
-    if request.kind in _FLAG_ACTIONS:
+    if request.kind in ENVOY_MISSIONS:
+        envoys = _envoys(state)
+        mission = ENVOY_MISSIONS[request.kind]
+        if any(envoy.get("location") and envoy["location"].get("assignment") == mission
+               and envoy["location"].get("id") == request.target_country_id for envoy in envoys.values()):
+            raise ValueError("An envoy of ours already has that mission with that country")
+        if not any(envoy.get("idle") is True for envoy in envoys.values()):
+            raise ValueError("No idle envoy of ours is observed")
+    elif request.kind in PROPOSALS:
+        action, flag = PROPOSALS[request.kind]
+        if relation.get("communications") is not True:
+            raise ValueError("Proposals need communications with that country")
+        current = relation.get("embassy") if flag == "embassy" else relation.get("pacts", {}).get(flag)
+        if current is not False:
+            raise ValueError("That agreement already exists or is not exactly observable")
+        if not isinstance(relation.get("our_proposals"), list):
+            raise ValueError("Pending proposals to that country are not exactly observable")
+        if any(entry.get("action") == action for entry in relation["our_proposals"]):
+            raise ValueError("That proposal is already pending; wait for the recipient's answer")
+    elif request.kind in _FLAG_ACTIONS:
         flag, before, _, _ = _FLAG_ACTIONS[request.kind]
         if relation.get(flag) is not before:
             raise ValueError(_ALREADY[request.kind])
@@ -208,6 +333,48 @@ def _without(relation: list, drop: frozenset) -> list:
     return [entry for entry in relation if entry[0] not in drop]
 
 
+def _envoy_assigned(before: dict, after: dict, request: DiplomacyRequest) -> bool:
+    first, second = _envoys(before), _envoys(after)
+    if set(first) != set(second):
+        return False
+    changed = [key for key, value in second.items() if first[key] != value]
+    if len(changed) != 1 or first[changed[0]].get("idle") is not True:
+        return False
+    location = second[changed[0]].get("location") or {}
+    return (location.get("assignment") == ENVOY_MISSIONS[request.kind]
+            and location.get("id") == request.target_country_id and isinstance(location.get("type"), str))
+
+
+def proposal_outcome(before: dict, after: dict, command: ResolvedDiplomacyCommand) -> str | None:
+    """``accepted`` or ``pending`` for one verified proposal; None for anything else."""
+    if type(command) is not ResolvedDiplomacyCommand or command.kind not in PROPOSALS:
+        return None
+    try:
+        request = _again(command.request)
+        action, flag = PROPOSALS[request.kind]
+        old = _observed(before).get(request.target_country_id)
+        new = _observed(after).get(request.target_country_id)
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            return None
+
+        def has(relation):
+            return relation.get("embassy") if flag == "embassy" else relation.get("pacts", {}).get(flag)
+        if has(old) is not False:
+            return None
+        added = [entry for entry in new.get("our_proposals") or [] if entry not in (old.get("our_proposals") or [])]
+        removed = [entry for entry in old.get("our_proposals") or [] if entry not in (new.get("our_proposals") or [])]
+        if removed:
+            return None
+        if has(new) is True and not added:
+            return "accepted"
+        if (has(new) is False and len(added) == 1 and added[0]["action"] == action
+                and added[0]["type"] == "propose" and added[0]["recipient"] == request.target_country_id):
+            return "pending"
+        return None
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
 def verify_diplomacy_command(before: dict, after: dict, command: ResolvedDiplomacyCommand) -> bool:
     """The controlled change happened on the same paused day; nothing else of ours moved."""
     if type(command) is not ResolvedDiplomacyCommand:
@@ -225,7 +392,17 @@ def verify_diplomacy_command(before: dict, after: dict, command: ResolvedDiploma
         old, new = first.get(target), second.get(target)
         if not isinstance(old, dict) or not isinstance(new, dict):
             return False
-        if request.kind in _FLAG_ACTIONS:
+        if request.kind in ENVOY_MISSIONS:
+            if not _envoy_assigned(before, after, request):
+                return False
+            ignored = _BOOKKEEPING
+        elif request.kind in PROPOSALS:
+            outcome = proposal_outcome(before, after, command)
+            if outcome is None:
+                return False
+            flag = PROPOSALS[request.kind][1]
+            ignored = _BOOKKEEPING | ({flag} if outcome == "accepted" else set())
+        elif request.kind in _FLAG_ACTIONS:
             flag, was, now, extra = _FLAG_ACTIONS[request.kind]
             if old.get(flag) is not was or new.get(flag) is not now:
                 return False
@@ -242,6 +419,16 @@ def verify_diplomacy_command(before: dict, after: dict, command: ResolvedDiploma
             return False
         if any(old.get(name) != new.get(name) for name in _FLAGS if name not in ignored):
             return False
+        if any(old.get("pacts", {}).get(name) != new.get("pacts", {}).get(name)
+               for name in PACT_FLAGS if name not in ignored):
+            return False
+        if request.kind not in PROPOSALS and old.get("our_proposals") != new.get("our_proposals"):
+            return False
+        if request.kind not in ENVOY_MISSIONS:
+            envoys_before = before.get("diplomacy", {}).get("envoys")
+            envoys_after = after.get("diplomacy", {}).get("envoys")
+            if envoys_before != envoys_after:
+                return False
         return all(second[key] == value for key, value in first.items() if key != target)
     except (ValueError, TypeError, KeyError, AttributeError):
         return False

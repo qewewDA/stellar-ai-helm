@@ -192,7 +192,9 @@ def test_event_option_step_is_typed_and_dispatched_to_the_event_command():
 
 
 def test_border_steps_are_typed_and_dispatched_to_the_diplomacy_command():
-    for kind in ("close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy"):
+    for kind in ("close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
+                 "harm_relations", "improve_relations", "propose_embassy", "propose_non_aggression_pact",
+                 "propose_research_agreement", "propose_commercial_pact", "propose_migration_pact"):
         step = {"kind": kind, "target_country_id": "73"}
         normalized, _ = normalize_plan([step])
         assert normalized == [step]

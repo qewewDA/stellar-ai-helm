@@ -159,7 +159,11 @@ def render_prompt(*, playstyle: str = "", campaign: bool = True, existing_game: 
         "set_policy 改政策选项，activate_edict / deactivate_edict 开关法令，均需版本知识库提供定义。"
         "list_pending_events 只列我方事件，choose_event_option 按序号选项；其他国家事件交给游戏 AI，不碰。"
         "list_diplomacy 读关系；close_borders / open_borders、insult、make_rival / end_rivalry、"
-        "recall_embassy 是自动接受的单方面外交动作，由游戏校验器决定可否；建交大使馆等需对方同意的提议未开放。"
+        "recall_embassy 是自动接受的单方面外交动作，由游戏校验器决定可否。"
+        "harm_relations / improve_relations 派一名空闲特使执行损害/改善关系任务（损害关系后可侮辱、宣布宿敌）。"
+        "propose_diplomacy 提交需对方同意的提议（embassy、non_aggression_pact、research_agreement、"
+        "commercial_pact、migration_pact）：验证结果为 accepted 或 pending；pending 由对方 AI 之后决定，"
+        "用 list_diplomacy 的 our_proposals / pacts 观察结果，被拒绝不自动重提。"
         "以上动作都可作为 execute_plan 的步骤（kind 加同名工具参数），一次最多 20 步，串行验证。",
         "【执行与汇报】\n"
         "每条命令核对真实后置条件，分别说明入队、订单验证、自然完成和殖民落地。"

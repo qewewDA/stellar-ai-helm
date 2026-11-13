@@ -1,4 +1,5 @@
-/* Pinned 4.5.2 unilateral diplomatic actions (auto-accepted proposals). Appended
+/* Pinned 4.5.2 diplomatic proposals (auto-accepted actions, envoy missions and
+ * proposals the recipient decides). Appended
  * after the other sources for the 4.5.2 build only; the 4.5.3 profile never
  * includes it. Callers never supply JavaScript, addresses or action tokens.
  *
@@ -18,8 +19,16 @@
  * action_make_rival 0x3384 / 0x23ae6d0, action_end_rivalry 0x3524 / 0x23aea20,
  * action_recall_embassy 0x3525 / 0x23aef18; all 0x50 bytes with type data
  * at +0x40 and the same base vtable slots (+0x58 0x942130, +0xa8/+0xb0
- * setters). All are auto_accepted in 00_actions.txt; action_embassy is not
- * (the recipient decides) and is deliberately absent. Save country ids are
+ * setters). All are auto_accepted in 00_actions.txt. Envoy missions
+ * action_harm_relation 0x351e / 0x23b1550 and action_improve_relation
+ * 0x351d / 0x23b0d08 are auto_accepted with require_envoy. Proposals the
+ * recipient decides (not auto_accepted): action_embassy 0x3383 / 0x23af0c0,
+ * action_form_non_aggression_pact 0x40da / 0x23afe20,
+ * action_form_research_agreement 0x2a2d / 0x23b04c0,
+ * action_form_commercial_pact 0x3cb4 / 0x23b0170,
+ * action_form_migration_pact 0x40ef / 0x23af780; every factory branch
+ * allocates 0x50 bytes, calls the shared constructor 0x93f6f0 and keeps the
+ * +0x58/+0xa8/+0xb0 slots above. Save country ids are
  * full handles (generation << 24 | index). The game's validator stays authoritative and every result is
  * verified from a fresh dump by diplomacy_commands.py.
  */
@@ -39,6 +48,13 @@ const qsDiploActions = {
     make_rival: {token: 0x3384, vtable: 0x23ae6d0},
     end_rivalry: {token: 0x3524, vtable: 0x23aea20},
     recall_embassy: {token: 0x3525, vtable: 0x23aef18},
+    harm_relations: {token: 0x351e, vtable: 0x23b1550},
+    improve_relations: {token: 0x351d, vtable: 0x23b0d08},
+    propose_embassy: {token: 0x3383, vtable: 0x23af0c0},
+    propose_non_aggression_pact: {token: 0x40da, vtable: 0x23afe20},
+    propose_research_agreement: {token: 0x2a2d, vtable: 0x23b04c0},
+    propose_commercial_pact: {token: 0x3cb4, vtable: 0x23b0170},
+    propose_migration_pact: {token: 0x40ef, vtable: 0x23af780},
 };
 
 function canonicalDiplomacyRequest(request) {
