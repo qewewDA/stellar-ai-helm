@@ -15,6 +15,7 @@ from .colony_ships import colony_ship_request
 from .planet_commands import planet_request
 from .fleet_native import fleet_request
 from .control_commands import control_request
+from .country_commands import country_request
 from .event_commands import event_request
 from .diplomacy_commands import diplomacy_request
 
@@ -142,6 +143,17 @@ class BordersStep(_Step):
     target_country_id: StrictStr
 
 
+class PolicyStep(_Step):
+    kind: Literal["set_policy"]
+    policy_id: StrictStr
+    option_id: StrictStr
+
+
+class EdictStep(_Step):
+    kind: Literal["activate_edict", "deactivate_edict"]
+    edict_id: StrictStr
+
+
 class PauseStep(_Step):
     kind: Literal["set_paused"]
     paused: StrictBool
@@ -151,7 +163,7 @@ PlanStep = Annotated[
     ResearchStep | DistrictStep | BuildingStep | ShipStep | ColonyShipStep | UpgradeStep
     | DemolishStep | ConvertStep | CancelConstructionStep | FleetTargetStep | StationStep
     | FleetMoveStep | FleetWaitStep | FleetStopStep | FleetStanceStep | QueueMoveStep
-    | DefensePlatformStep | EventOptionStep | BordersStep | PauseStep,
+    | DefensePlatformStep | EventOptionStep | BordersStep | PolicyStep | EdictStep | PauseStep,
     Field(discriminator="kind"),
 ]
 PlanSteps = Annotated[list[PlanStep], Field(min_length=1, max_length=20)]
@@ -165,10 +177,29 @@ def request_identifier(value: str) -> str:
     return value
 
 
-def dispatch_step(connection, step: dict):
-    """Call the existing typed API; also usable with a validation-only target."""
+def _no_definitions(kind: str, category: str, object_id: str):
+    return {"status": "blocked", "reason": "Versioned knowledge is not attached; exact definition facts are "
+                                           "required before a policy or edict step is submitted"}
+
+
+def dispatch_step(connection, step: dict, definitions=None):
+    """Call the existing typed API; also usable with a validation-only target.
+
+    ``definitions(kind, category, object_id)`` returns the versioned definition
+    facts the policy/edict tools also require, or a blocked result.
+    """
     kind = step["kind"]
     args = {key: value for key, value in step.items() if key != "kind"}
+    if kind in {"set_policy", "activate_edict"}:
+        category, object_id = ("policies", args["policy_id"]) if kind == "set_policy" else ("edicts", args["edict_id"])
+        definition = (definitions or _no_definitions)(kind, category, object_id)
+        if isinstance(definition, dict):
+            return definition
+        if kind == "set_policy":
+            return connection.country_command(kind, definition, policy=args["policy_id"], option=args["option_id"])
+        return connection.country_command(kind, definition, edict=args["edict_id"])
+    if kind == "deactivate_edict":
+        return connection.country_command(kind, None, edict=args["edict_id"])
     if kind in {"set_fleet_stance", "move_queue_item", "queue_defense_platform"}:
         return connection.control_command(kind, **args)
     if kind == "choose_event_option":
@@ -201,6 +232,7 @@ class _Validate:
     fleet_command = staticmethod(fleet_request)
     planet_command = staticmethod(planet_request)
     control_command = staticmethod(control_request)
+    country_command = staticmethod(country_request)
     event_command = staticmethod(event_request)
     diplomacy_command = staticmethod(diplomacy_request)
     select_research = staticmethod(research_selection)
@@ -218,7 +250,7 @@ def normalize_plan(steps, expected_snapshot: str | None = None) -> tuple[list[di
     normalized = [step.model_dump() for step in _PLAN.validate_python(steps)]
     fleets = set()
     for index, step in enumerate(normalized):
-        dispatch_step(_Validate(), step)
+        dispatch_step(_Validate(), step, definitions=lambda *_: None)
         if step["kind"] == "set_paused" and (index != 0 or step["paused"] is not True):
             raise ValueError("A plan may explicitly pause only as its first step; time advancement is separate")
         # A stance change is not an order; it never conflicts with one.

@@ -152,7 +152,15 @@ def render_prompt(*, playstyle: str = "", campaign: bool = True, existing_game: 
         "移动指定目的系统中已观察到的物理天体 planet_id。"
         "勘察用 survey_planet，建站用 build_station，殖民用 colonize_planet，普通造舰用 queue_ship，"
         "殖民船用 queue_colony_ship 并明确种族。星际基地、空间站、舰队各有独立 ID，按新状态引用连接。"
-        "旧脚本动作与新订单冲突且本次任务明确允许替换时，才显式 fleet_stop 并验证两类队列清空。",
+        "旧脚本动作与新订单冲突且本次任务明确允许替换时，才显式 fleet_stop 并验证两类队列清空。"
+        "舰队姿态用 set_fleet_stance（passive/aggressive/evasive），防御平台用 queue_defense_platform，"
+        "建造队列顺序用 move_queue_item（up/down）。",
+        "【国家、事件与外交工具】\n"
+        "set_policy 改政策选项，activate_edict / deactivate_edict 开关法令，均需版本知识库提供定义。"
+        "list_pending_events 只列我方事件，choose_event_option 按序号选项；其他国家事件交给游戏 AI，不碰。"
+        "list_diplomacy 读关系；close_borders / open_borders、insult、make_rival / end_rivalry、"
+        "recall_embassy 是自动接受的单方面外交动作，由游戏校验器决定可否；建交大使馆等需对方同意的提议未开放。"
+        "以上动作都可作为 execute_plan 的步骤（kind 加同名工具参数），一次最多 20 步，串行验证。",
         "【执行与汇报】\n"
         "每条命令核对真实后置条件，分别说明入队、订单验证、自然完成和殖民落地。"
         "工具返回 verified 与对应 snapshot 即已完成该步后置条件核验；"

@@ -202,3 +202,33 @@ def test_border_steps_are_typed_and_dispatched_to_the_diplomacy_command():
         for bad in ({**step, "target_country_id": "0"}, {**step, "target_country_id": 73}, {**step, "x": "1"}):
             with pytest.raises(ValueError):
                 normalize_plan([bad])
+
+
+def test_policy_and_edict_steps_need_definition_facts_and_use_the_country_command():
+    from stellaris_autopilot.country_commands import CountryDefinition
+    steps = [{"kind": "set_policy", "policy_id": "economic_policy", "option_id": "civilian_economy"},
+             {"kind": "activate_edict", "edict_id": "capacity_subsidies"},
+             {"kind": "deactivate_edict", "edict_id": "capacity_subsidies"}]
+    normalized, _ = normalize_plan(steps)
+    assert normalized == steps
+    connection = Calls()
+    blocked = dispatch_step(connection, copy.deepcopy(steps[0]))
+    assert blocked["status"] == "blocked" and connection.calls == []
+    lookups = []
+    definition = object.__new__(CountryDefinition)
+
+    def definitions(kind, category, object_id):
+        lookups.append((kind, category, object_id))
+        return definition
+    for step in steps:
+        assert dispatch_step(connection, copy.deepcopy(step), definitions) == "existing-api-result"
+    assert lookups == [("set_policy", "policies", "economic_policy"), ("activate_edict", "edicts", "capacity_subsidies")]
+    assert connection.calls == [
+        ("country_command", ("set_policy", definition), {"policy": "economic_policy", "option": "civilian_economy"}),
+        ("country_command", ("activate_edict", definition), {"edict": "capacity_subsidies"}),
+        ("country_command", ("deactivate_edict", None), {"edict": "capacity_subsidies"})]
+    refused = dispatch_step(Calls(), copy.deepcopy(steps[1]), lambda *_: {"status": "blocked", "reason": "x"})
+    assert refused == {"status": "blocked", "reason": "x"}
+    for bad in ({**steps[0], "option_id": 1}, {**steps[1], "edict_id": "bad id"}, {**steps[2], "cost": "1"}):
+        with pytest.raises(ValueError):
+            normalize_plan([bad])

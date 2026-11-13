@@ -16,9 +16,11 @@ _VERIFIED = frozenset({
 
 
 class TaskWorkflow:
-    def __init__(self, connection, path: Path):
+    def __init__(self, connection, path: Path, definitions=None):
         self.connection = connection
         self.store = TaskStore(path)
+        # Versioned definition facts for policy/edict steps; without them those steps are blocked.
+        self.definitions = definitions
 
     def execute(self, request_id: str, steps, expected_snapshot: str | None = None, *,
                 _cancel_event: threading.Event | None = None) -> dict:
@@ -42,7 +44,8 @@ class TaskWorkflow:
                     self.store.cancel(request_id)
                 if not self.store.start_step(request_id, index):
                     return self.store.finish(request_id, "cancelled")
-                result = dispatch_step(connection, step)
+                result = (dispatch_step(connection, step) if self.definitions is None
+                          else dispatch_step(connection, step, self.definitions))
                 status = result.get("status") if isinstance(result, dict) else None
                 if status in _VERIFIED:
                     self.store.step_result(request_id, index, "verified", result)
