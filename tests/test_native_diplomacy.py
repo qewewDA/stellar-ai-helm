@@ -170,3 +170,17 @@ def test_an_unexpected_command_destroys_only_the_unowned_action():
 def test_action_allocation_failure_is_reported():
     result = _run("action_fail")
     assert result["accepted"] is False and 0x9d8280 not in result["calls"]
+
+
+def test_every_diplomacy_kind_is_routed_to_the_diplomacy_adapter():
+    # Live 2026-11-14: an unrouted kind fell through to the fleet adapter and was
+    # rejected before dispatch ("Unknown fleet command kind").
+    import re
+
+    from stellaris_autopilot.diplomacy_commands import DIPLOMACY_KINDS
+    router = (SOURCE.parent / "native_research.js").read_text(encoding="utf-8")
+    match = re.search(r"\[([^\]]*)\]\s*\.includes\(request\.kind\)\s*\?\s*prepareDiplomacyCommand", router)
+    assert match is not None
+    routed = set(re.findall(r"'([a-z_]+)'", match.group(1)))
+    table = set(re.findall(r"^\s+([a-z_]+): \{token: 0x", SOURCE.read_text(encoding="utf-8"), re.M))
+    assert routed == set(DIPLOMACY_KINDS) == table
