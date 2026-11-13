@@ -45,6 +45,8 @@ from .planet_commands import planet_request
 from .country_commands import country_request, definition_from_record
 from .control_commands import control_request
 from .diplomacy_commands import PROPOSALS, ResolvedDiplomacyCommand, diplomacy_request, proposal_outcome
+from .decision_commands import (ResolvedDecisionCommand, decision_definition, decision_outcome, decision_request,
+                                list_planet_decisions as planet_decision_listing)
 from .intent_plan import propose_plan
 from .event_commands import (EventCatalog, ResolvedEventCommand, describe_pending_events, event_request,
                              observed_effects)
@@ -371,6 +373,9 @@ class DirectConnection:
     def diplomacy_command(self, kind: str, **payload) -> dict:
         return self._extended(diplomacy_request(kind, **payload))
 
+    def decision_command(self, kind: str, definition=None, **payload) -> dict:
+        return self._extended(decision_request(kind, definition, **payload))
+
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
             return {"status": "blocked", "reason": "A pinned native worker for a launcher-owned game is required"}
@@ -587,6 +592,8 @@ class DirectConnection:
                                     **({"proposal_outcome": proposal_outcome(before.state, after.state, selection)}
                                        if isinstance(selection, ResolvedDiplomacyCommand)
                                        and selection.kind in PROPOSALS else {}),
+                                    **({"decision_outcome": decision_outcome(before.state, after.state, selection)}
+                                       if isinstance(selection, ResolvedDecisionCommand) else {}),
                                     "id": operation_id, "token": token,
                                     "snapshot": after.digest, "date": after.state["date"],
                                     **verified_context(before, after, action_id, payload,
@@ -1138,6 +1145,42 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                 player_event_id=player_event_id, option_index=option_index)
 
     @server.tool(annotations=readonly)
+    async def list_planet_decisions() -> dict:
+        """List our planets (with their timed modifiers) and the planet decisions from versioned knowledge.
+
+        Reads the latest snapshot only; never publishes a command. Shows each
+        decision's base cost and marks decisions an observed modifier already
+        blocks. Other potential/allow conditions are decided by the game's
+        validator in enact_planet_decision.
+        """
+        observed = await call_write(connection.observe)
+        state = observed.get("state") if isinstance(observed, dict) else None
+        if not isinstance(state, dict) or (state.get("planet_modifiers") or {}).get("known") is not True:
+            return {"status": "blocked", "reason": "Planet modifiers are not exactly observable in this snapshot"}
+        try:
+            records = [record for key, record in knowledge().bundle["records"].items() if key.startswith("decisions:")]
+        except (ValueError, KeyError, AttributeError):
+            return {"status": "blocked", "reason": "Versioned knowledge with decisions is required"}
+        return {**planet_decision_listing(state, records), "snapshot": observed.get("snapshot"), "date": state.get("date")}
+
+    @server.tool(annotations=writing)
+    async def enact_planet_decision(planet_id: str, decision_id: str) -> dict:
+        """Enact one planetary decision on one of our planets through the normal native command.
+
+        Requires a paused session and the decision's base cost from versioned
+        knowledge (owned-planet decisions only). The game's validator checks
+        potential, allow and affordability. Verified on the same paused day as
+        decision_outcome "queued" (one new paid buildable_decision item) or
+        "enacted" (the planet gained a modifier and only the cost resources fell).
+        """
+        try:
+            definition = decision_definition(knowledge().lookup("decisions", decision_id, ["owned_planets_only", "resources"]))
+        except ValueError as error:
+            return {"status": "blocked", "reason": "Exact definition facts are required before submission: " + str(error)}
+        return await call_write(connection.decision_command, "enact_planet_decision", definition,
+                                planet_id=planet_id, decision_id=decision_id)
+
+    @server.tool(annotations=readonly)
     async def list_diplomacy() -> dict:
         """List our side of every known relation: contact, communications, hostility and border state.
 
@@ -1295,6 +1338,7 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "set_policy": "Change one active policy to a known option, respecting its cooldown",
                                     "activate_edict": "Activate one edict with normal legality checks and exact payment",
                                     "deactivate_edict": "Cancel one active edict normally, verifying no refund",
+                                    "enact_planet_decision": "Enact one planetary decision on an owned planet with normal checks",
                                     "set_fleet_stance": "Set one owned fleet's passive/aggressive/evasive stance normally",
                                     "move_queue_item": "Move one owned construction item one place up or down in its queue",
                                     "queue_defense_platform": "Queue one defense platform at an owned starbase with normal payment",

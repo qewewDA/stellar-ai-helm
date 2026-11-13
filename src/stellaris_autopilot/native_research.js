@@ -341,6 +341,7 @@ function consumePending(source = 'run') {
                         'harm_relations', 'improve_relations', 'propose_embassy', 'propose_non_aggression_pact',
                         'propose_research_agreement', 'propose_commercial_pact', 'propose_migration_pact']
                         .includes(request.kind) ? prepareDiplomacyCommand(request)
+                    : request.kind === 'enact_planet_decision' ? prepareDecisionCommand(request)
                     : ['upgrade_building', 'demolish_building', 'convert_zone', 'cancel_construction'].includes(request.kind)
                     ? preparePlanetCommand(request) : prepareFleetCommand(request);
                 command = prepared.command;

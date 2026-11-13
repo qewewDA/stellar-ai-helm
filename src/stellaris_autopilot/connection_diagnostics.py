@@ -21,7 +21,7 @@ _ACTION_KINDS = frozenset({
     "activate_edict", "deactivate_edict", "set_fleet_stance", "move_queue_item", "queue_defense_platform",
     "choose_event_option", "close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
     "harm_relations", "improve_relations", "propose_embassy", "propose_non_aggression_pact",
-    "propose_research_agreement", "propose_commercial_pact", "propose_migration_pact",
+    "propose_research_agreement", "propose_commercial_pact", "propose_migration_pact", "enact_planet_decision",
 })
 
 

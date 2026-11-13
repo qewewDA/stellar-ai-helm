@@ -11,6 +11,7 @@ from .country_commands import observe_country_controls
 from .control_commands import observe_control_state
 from .event_commands import observe_pending_events
 from .diplomacy_commands import observe_diplomacy
+from .decision_commands import observe_planet_modifiers
 
 
 class SaveError(ValueError):
@@ -934,6 +935,7 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
         'control_state': observe_control_state(root, country_id, fleets, fleets_known),
         'pending_events': observe_pending_events(root),
         'diplomacy': observe_diplomacy(root, country_id) if country_id == '0' else {'known': False, 'by_country': {}},
+        'planet_modifiers': observe_planet_modifiers(root, [planet['id'] for planet in planets]),
         'fleets': fleets,
         'planets': planets,
         'fleets_by_id': {fleet['id']: fleet for fleet in fleets},
