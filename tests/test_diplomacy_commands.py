@@ -3,6 +3,7 @@ import copy
 import pytest
 
 from stellaris_autopilot.diplomacy_commands import (
+    ResolvedDiplomacyCommand,
     diplomacy_request, native_diplomacy_payload, observe_diplomacy, proposal_outcome, resolve_diplomacy_command,
     verify_diplomacy_command,
 )
@@ -195,7 +196,7 @@ def _envoy_state(a="", b="", ours="", incoming="", date="2209.02.06"):
     return _state(text, date=date)
 
 
-HARM = "location={ type=envoy_location_country assignment=harm_relations id=16777222 position=0 }"
+HARM = "location={ type=empire assignment=harm_relations id=16777222 position=0 }"
 
 
 def _pending(action="action_embassy", actor="0", recipient="16777222"):
@@ -208,7 +209,7 @@ def test_observation_reads_our_envoys_pacts_and_pending_proposals():
     envoys = state["diplomacy"]["envoys"]
     assert envoys["known"] is True and set(envoys["by_id"]) == {"301989890", "301989891"}
     assert envoys["by_id"]["301989890"] == {"id": "301989890", "location": None, "idle": True}
-    assert envoys["by_id"]["301989891"]["location"] == {"type": "envoy_location_country",
+    assert envoys["by_id"]["301989891"]["location"] == {"type": "empire",
                                                          "assignment": "harm_relations", "id": "16777222"}
     entry = state["diplomacy"]["by_country"]["16777222"]
     assert entry["pacts"]["commercial_pact"] is True and entry["pacts"]["research_agreement"] is False
@@ -224,8 +225,24 @@ def test_observation_reads_our_envoys_pacts_and_pending_proposals():
                                   "propose_commercial_pact", "propose_migration_pact"])
 def test_new_kinds_produce_the_fixed_native_payload(kind):
     command = resolve_diplomacy_command(_envoy_state(), diplomacy_request(kind, target_country_id="16777222"))
+    envoy = {"leader_id": "301989890"} if kind.endswith("_relations") else {}
     assert native_diplomacy_payload(command, "b" * 32) == {"kind": kind, "country_id": "0", "token": "b" * 32,
-                                                           "target_country_id": "16777222"}
+                                                           "target_country_id": "16777222", **envoy}
+
+
+def test_envoy_missions_pick_our_lowest_idle_envoy_and_carry_it_everywhere():
+    busy = "location={ type=empire assignment=improve_relations id=73 position=0 }"
+    harm = diplomacy_request("harm_relations", target_country_id="16777222")
+    assert resolve_diplomacy_command(_envoy_state(), harm).leader_id == "301989890"
+    command = resolve_diplomacy_command(_envoy_state(a=busy), harm)
+    assert command.leader_id == "301989891"
+    assert command.to_dict() == {"target_country_id": "16777222", "leader_id": "301989891"}
+    with pytest.raises(ValueError, match="needs the observed idle envoy"):
+        native_diplomacy_payload(ResolvedDiplomacyCommand(harm), "b" * 32)
+    close = diplomacy_request("close_borders", target_country_id="16777222")
+    with pytest.raises(ValueError, match="Only envoy missions"):
+        native_diplomacy_payload(ResolvedDiplomacyCommand(close, "301989890"), "b" * 32)
+    assert resolve_diplomacy_command(_envoy_state(), close).to_dict() == {"target_country_id": "16777222"}
 
 
 def test_envoy_missions_need_an_idle_envoy_and_no_duplicate_mission():
@@ -234,7 +251,7 @@ def test_envoy_missions_need_an_idle_envoy_and_no_duplicate_mission():
         resolve_diplomacy_command(_state(), harm)
     with pytest.raises(ValueError, match="already has that mission"):
         resolve_diplomacy_command(_envoy_state(b=HARM), harm)
-    busy = "location={ type=envoy_location_country assignment=improve_relations id=73 position=0 }"
+    busy = "location={ type=empire assignment=improve_relations id=73 position=0 }"
     with pytest.raises(ValueError, match="No idle envoy"):
         resolve_diplomacy_command(_envoy_state(a=busy, b=busy), harm)
     resolve_diplomacy_command(_envoy_state(a=busy, b="location={ type=0 assignment=none id=0 }"), harm)
@@ -243,15 +260,19 @@ def test_envoy_missions_need_an_idle_envoy_and_no_duplicate_mission():
 def test_envoy_verification_needs_exactly_one_idle_envoy_on_that_mission():
     before = _envoy_state()
     harm = resolve_diplomacy_command(before, diplomacy_request("harm_relations", target_country_id="16777222"))
-    assert verify_diplomacy_command(before, _envoy_state(b=HARM), harm) is True
+    assert harm.leader_id == "301989890"
+    assert verify_diplomacy_command(before, _envoy_state(a=HARM), harm) is True
+    # A different envoy than the one sent, or a non-country location, is not our command's effect.
+    assert verify_diplomacy_command(before, _envoy_state(b=HARM), harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(a=HARM.replace("empire", "federation")), harm) is False
     assert verify_diplomacy_command(before, before, harm) is False
     assert verify_diplomacy_command(before, _envoy_state(a=HARM, b=HARM), harm) is False
-    assert verify_diplomacy_command(before, _envoy_state(b=HARM.replace("16777222", "73")), harm) is False
-    assert verify_diplomacy_command(before, _envoy_state(b=HARM.replace("harm_", "improve_")), harm) is False
-    assert verify_diplomacy_command(before, _envoy_state(b=HARM, ours="is_rival=yes"), harm) is False
-    assert verify_diplomacy_command(before, _envoy_state(b=HARM, date="2209.02.07"), harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(a=HARM.replace("16777222", "73")), harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(a=HARM.replace("harm_", "improve_")), harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(a=HARM, ours="is_rival=yes"), harm) is False
+    assert verify_diplomacy_command(before, _envoy_state(a=HARM, date="2209.02.07"), harm) is False
     improve = resolve_diplomacy_command(before, diplomacy_request("improve_relations", target_country_id="16777222"))
-    assert verify_diplomacy_command(before, _envoy_state(b=HARM.replace("harm_", "improve_")), improve) is True
+    assert verify_diplomacy_command(before, _envoy_state(a=HARM.replace("harm_", "improve_")), improve) is True
     # Other actions must leave our envoys alone.
     close = resolve_diplomacy_command(before, diplomacy_request("close_borders", target_country_id="16777222"))
     assert verify_diplomacy_command(before, _envoy_state(b=HARM, ours="closed_borders=yes"), close) is False

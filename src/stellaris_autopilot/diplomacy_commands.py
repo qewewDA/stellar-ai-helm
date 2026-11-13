@@ -26,11 +26,14 @@ on the same paused day and nothing else of ours changes, apart from
 insult changes no flag of ours; it must add an ``opinion_insult`` modifier
 to the target's opinion of us.
 
-Envoy missions (``action_harm_relation`` / ``action_improve_relation``) are
-auto-accepted with ``require_envoy = yes``: verified when exactly one of our
-idle envoys (``leaders`` entries with ``country=0 class="envoy"``) gains a
-``location`` with ``assignment=harm_relations|improve_relations`` and
-``id=<target>``; nothing else of ours changes.
+Envoy missions are not proposals: proposing ``action_harm_relation`` alone
+was observed live (2210.02.05) to only log a ``last_diplo_actions`` entry. The
+diplomacy view assigns an envoy with ``assign_leader_command`` (factory
+0xbe92f0, vtable 0x23cae08, see native_diplomacy.js): leader handle plus a
+location ``{type=empire assignment=harm_relations|improve_relations
+id=<target> position=0}``. Resolution picks our lowest-id idle envoy
+(``leaders`` entries with ``country=0 class="envoy"``); verified when exactly
+that envoy gains that location and nothing else of ours changes.
 
 Proposals that need the recipient's acceptance (embassy, non-aggression
 pact, research agreement, commercial pact, migration pact) use the same
@@ -250,13 +253,14 @@ def diplomacy_request(kind: str, *, target_country_id) -> DiplomacyRequest:
 @dataclass(frozen=True)
 class ResolvedDiplomacyCommand:
     request: DiplomacyRequest
+    leader_id: str | None = None
 
     @property
     def kind(self) -> str:
         return self.request.kind
 
     def to_dict(self) -> dict:
-        return self.request.to_dict()
+        return {**self.request.to_dict(), **({"leader_id": self.leader_id} if self.leader_id is not None else {})}
 
 
 def _again(request: DiplomacyRequest) -> DiplomacyRequest:
@@ -300,8 +304,10 @@ def resolve_diplomacy_command(state: dict, request: DiplomacyRequest) -> Resolve
         if any(envoy.get("location") and envoy["location"].get("assignment") == mission
                and envoy["location"].get("id") == request.target_country_id for envoy in envoys.values()):
             raise ValueError("An envoy of ours already has that mission with that country")
-        if not any(envoy.get("idle") is True for envoy in envoys.values()):
+        idle = sorted((key for key, envoy in envoys.items() if envoy.get("idle") is True), key=int)
+        if not idle:
             raise ValueError("No idle envoy of ours is observed")
+        return ResolvedDiplomacyCommand(request, _id(idle[0]))
     elif request.kind in PROPOSALS:
         action, flag = PROPOSALS[request.kind]
         if relation.get("communications") is not True:
@@ -322,27 +328,40 @@ def resolve_diplomacy_command(state: dict, request: DiplomacyRequest) -> Resolve
     return ResolvedDiplomacyCommand(request)
 
 
+def _leader(command: ResolvedDiplomacyCommand) -> str | None:
+    """The envoy an envoy mission assigns; other kinds carry none."""
+    if command.request.kind in ENVOY_MISSIONS:
+        if not isinstance(command.leader_id, str):
+            raise ValueError("An envoy mission needs the observed idle envoy")
+        return _id(command.leader_id)
+    if command.leader_id is not None:
+        raise ValueError("Only envoy missions assign a leader")
+    return None
+
+
 def native_diplomacy_payload(command: ResolvedDiplomacyCommand, token: str) -> dict:
     if type(command) is not ResolvedDiplomacyCommand:
         raise ValueError("A resolved diplomacy command is required")
     request = _again(command.request)
-    return {"kind": request.kind, "country_id": "0", "token": token, **request.to_dict()}
+    leader = _leader(command)
+    return {"kind": request.kind, "country_id": "0", "token": token, **request.to_dict(),
+            **({"leader_id": leader} if leader is not None else {})}
 
 
 def _without(relation: list, drop: frozenset) -> list:
     return [entry for entry in relation if entry[0] not in drop]
 
 
-def _envoy_assigned(before: dict, after: dict, request: DiplomacyRequest) -> bool:
+def _envoy_assigned(before: dict, after: dict, request: DiplomacyRequest, leader: str) -> bool:
     first, second = _envoys(before), _envoys(after)
     if set(first) != set(second):
         return False
     changed = [key for key, value in second.items() if first[key] != value]
-    if len(changed) != 1 or first[changed[0]].get("idle") is not True:
+    if changed != [leader] or first[leader].get("idle") is not True:
         return False
-    location = second[changed[0]].get("location") or {}
+    location = second[leader].get("location") or {}
     return (location.get("assignment") == ENVOY_MISSIONS[request.kind]
-            and location.get("id") == request.target_country_id and isinstance(location.get("type"), str))
+            and location.get("id") == request.target_country_id and location.get("type") == "empire")
 
 
 def proposal_outcome(before: dict, after: dict, command: ResolvedDiplomacyCommand) -> str | None:
@@ -381,6 +400,7 @@ def verify_diplomacy_command(before: dict, after: dict, command: ResolvedDiploma
         return False
     try:
         request = _again(command.request)
+        leader = _leader(command)
         if (not isinstance(before.get("date"), str) or _DATE.fullmatch(before["date"]) is None
                 or after.get("date") != before["date"] or after.get("country_id") != "0"
                 or before.get("metadata", {}).get("campaign_id") != after.get("metadata", {}).get("campaign_id")):
@@ -393,7 +413,7 @@ def verify_diplomacy_command(before: dict, after: dict, command: ResolvedDiploma
         if not isinstance(old, dict) or not isinstance(new, dict):
             return False
         if request.kind in ENVOY_MISSIONS:
-            if not _envoy_assigned(before, after, request):
+            if not _envoy_assigned(before, after, request, leader):
                 return False
             ignored = _BOOKKEEPING
         elif request.kind in PROPOSALS:

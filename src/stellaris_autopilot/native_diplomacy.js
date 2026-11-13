@@ -21,7 +21,9 @@
  * at +0x40 and the same base vtable slots (+0x58 0x942130, +0xa8/+0xb0
  * setters). All are auto_accepted in 00_actions.txt. Envoy missions
  * action_harm_relation 0x351e / 0x23b1550 and action_improve_relation
- * 0x351d / 0x23b0d08 are auto_accepted with require_envoy. Proposals the
+ * 0x351d / 0x23b0d08 are auto_accepted with require_envoy, but proposing
+ * one alone only logs it (observed live); envoys are sent with
+ * assign_leader_command instead (below). Proposals the
  * recipient decides (not auto_accepted): action_embassy 0x3383 / 0x23af0c0,
  * action_form_non_aggression_pact 0x40da / 0x23afe20,
  * action_form_research_agreement 0x2a2d / 0x23b04c0,
@@ -31,6 +33,19 @@
  * +0x58/+0xa8/+0xb0 slots above. Save country ids are
  * full handles (generation << 24 | index). The game's validator stays authoritative and every result is
  * verified from a fresh dump by diplomacy_commands.py.
+ *
+ * Envoy missions: assign_leader_command (token 0x40ad, GetType 0xbe5bb0,
+ * vtable 0x23cae08: +0x0 dtor 0x6b2ca0, +0x40 validate 0x1d0dc50, +0x48
+ * execute 0x1d0dbe0). Registered factory 0xbe92f0 allocates 0x38 bytes:
+ * +0x20 leader handle (-1), +0x24 location {byte type (0), +0x28 assignment
+ * (9 = none), +0x2c id (-1), +0x30 position (0)}, +0x34 flag (1). Write
+ * 0x1d0da60 serializes leader then location via 0x9a5bb0 (type enum 4 =
+ * empire; assignment enum via 0x337d50: 0 improve_relations, 1
+ * harm_relations). The AI envoy planner 0xbcb210 fills exactly these fields
+ * and validates with 0x1d0dc50 before posting; the location check 0x9a2900
+ * for type 4 requires assignment != none and id in the country database.
+ * Execute resolves the leader in [0x3114e08] (+0x18 entries stride 0x10,
+ * object at +8, object+0x20 handle) and calls 0x9a3790.
  */
 'use strict';
 
@@ -48,8 +63,6 @@ const qsDiploActions = {
     make_rival: {token: 0x3384, vtable: 0x23ae6d0},
     end_rivalry: {token: 0x3524, vtable: 0x23aea20},
     recall_embassy: {token: 0x3525, vtable: 0x23aef18},
-    harm_relations: {token: 0x351e, vtable: 0x23b1550},
-    improve_relations: {token: 0x351d, vtable: 0x23b0d08},
     propose_embassy: {token: 0x3383, vtable: 0x23af0c0},
     propose_non_aggression_pact: {token: 0x40da, vtable: 0x23afe20},
     propose_research_agreement: {token: 0x2a2d, vtable: 0x23b04c0},
@@ -57,9 +70,28 @@ const qsDiploActions = {
     propose_migration_pact: {token: 0x40ef, vtable: 0x23af780},
 };
 
+const qsLeaderDatabase = base.add(0x3114e08);
+const qsCreateAssignLeader = new NativeFunction(base.add(0xbe92f0), 'pointer', [], 'win64');
+const qsValidateAssignLeader = new NativeFunction(base.add(0x1d0dc50), 'uint8', ['pointer', 'pointer'], 'win64');
+const qsAssignLeaderVtable = 0x23cae08;
+const qsEnvoyLocationEmpire = 4;
+const qsEnvoyMissions = {improve_relations: 0, harm_relations: 1};
+
+function canonicalEnvoyRequest(request) {
+    if (Array.isArray(request) ||
+        Object.keys(request).sort().join(',') !== 'country_id,kind,leader_id,target_country_id,token' ||
+        request.country_id !== '0' || typeof request.token !== 'string' || !/^[0-9a-f]{32}$/.test(request.token) ||
+        !validId(request.target_country_id) || request.target_country_id === '0' || !validId(request.leader_id)) {
+        throw new Error('Malformed typed envoy request');
+    }
+    return {kind: request.kind, country_id: '0', leader_id: request.leader_id,
+        target_country_id: request.target_country_id, token: request.token};
+}
+
 function canonicalDiplomacyRequest(request) {
-    if (request === null || typeof request !== 'object' ||
-        !Object.prototype.hasOwnProperty.call(qsDiploActions, request.kind)) return null;
+    if (request === null || typeof request !== 'object') return null;
+    if (Object.prototype.hasOwnProperty.call(qsEnvoyMissions, request.kind)) return canonicalEnvoyRequest(request);
+    if (!Object.prototype.hasOwnProperty.call(qsDiploActions, request.kind)) return null;
     if (Array.isArray(request) || Object.keys(request).sort().join(',') !== 'country_id,kind,target_country_id,token' ||
         request.country_id !== '0' || typeof request.token !== 'string' || !/^[0-9a-f]{32}$/.test(request.token) ||
         !validId(request.target_country_id) || request.target_country_id === '0') {
@@ -81,6 +113,57 @@ function qsCountryObject(id) {
     const handle = country.add(0x20).readU32();
     if (handle !== id) throw new NativePreconditionError('The country handle does not match its id');
     return {country, handle};
+}
+
+function qsLeaderObject(id) {
+    const database = qsLeaderDatabase.readPointer();
+    if (database.isNull()) throw new NativePreconditionError('The leader database is unavailable');
+    const entries = database.add(0x18).readPointer();
+    const count = database.add(0x20).readU32();
+    if (entries.isNull() || count < 1 || count > 0x100000) throw new NativePreconditionError('Unrecognized leader database layout');
+    const index = id % 0x1000000;
+    if (index >= count) throw new NativePreconditionError('The envoy is not in the leader database');
+    const leader = entries.add(index * 0x10 + 8).readPointer();
+    if (leader.isNull()) throw new NativePreconditionError('The envoy no longer exists');
+    if (leader.add(0x20).readU32() !== id) throw new NativePreconditionError('The envoy handle does not match its id');
+    return leader;
+}
+
+function qsEnvoyCommand(request) {
+    const game = qsEventGame.readPointer();
+    if (game.isNull()) throw new NativePreconditionError('The game state is unavailable');
+    const player = qsLocalPlayer(game);
+    if (player.isNull() || player.add(0x5c).readU32() !== 0) {
+        throw new NativePreconditionError('The local human does not play country 0');
+    }
+    const receiver = qsCountryObject(Number(request.target_country_id));
+    if (receiver.handle === 0) throw new NativePreconditionError('A country cannot target itself');
+    const leaderId = Number(request.leader_id);
+    qsLeaderObject(leaderId);
+    const command = qsCreateAssignLeader();
+    if (command.isNull()) throw new Error('Envoy command allocation failed');
+    const vtable = command.readPointer();
+    // An unrecognized command is never destroyed through a guessed vtable.
+    if (!vtable.equals(base.add(qsAssignLeaderVtable)) || !vtable.readPointer().equals(base.add(0x6b2ca0)) ||
+        !vtable.add(0x40).readPointer().equals(base.add(0x1d0dc50)) ||
+        !vtable.add(0x48).readPointer().equals(base.add(0x1d0dbe0))) {
+        throw new Error('Envoy command layout mismatch');
+    }
+    if (command.add(0x20).readU32() !== 0xffffffff || command.add(0x24).readU8() !== 0 ||
+        command.add(0x28).readU32() !== 9 || command.add(0x2c).readU32() !== 0xffffffff ||
+        command.add(0x30).readS32() !== 0 || command.add(0x34).readU8() !== 1) {
+        try { destroyUnsubmitted(command); } catch (_) { /* no second cleanup attempt */ }
+        throw new Error('Envoy command defaults mismatch');
+    }
+    const assignment = qsEnvoyMissions[request.kind];
+    command.add(0x20).writeU32(leaderId);
+    command.add(0x24).writeU8(qsEnvoyLocationEmpire);
+    command.add(0x28).writeU32(assignment);
+    command.add(0x2c).writeU32(receiver.handle);
+    command.add(0x30).writeS32(0);
+    return {command, validation: qsValidateWithReason(qsValidateAssignLeader, command),
+        meta: {native_leader_handle: leaderId, native_receiver_handle: receiver.handle,
+            native_location_type: qsEnvoyLocationEmpire, native_assignment: assignment}};
 }
 
 function qsDiplomacyCommand(request) {
@@ -130,5 +213,6 @@ function qsDiplomacyCommand(request) {
 function prepareDiplomacyCommand(request) {
     const canonical = canonicalDiplomacyRequest(request);
     if (canonical === null) throw new Error('Unknown diplomacy command kind');
+    if (Object.prototype.hasOwnProperty.call(qsEnvoyMissions, canonical.kind)) return qsEnvoyCommand(canonical);
     return qsDiplomacyCommand(canonical);
 }
