@@ -45,6 +45,7 @@ from .planet_commands import planet_request
 from .country_commands import country_request, definition_from_record
 from .control_commands import control_request
 from .diplomacy_commands import diplomacy_request
+from .intent_plan import propose_plan
 from .event_commands import (EventCatalog, ResolvedEventCommand, describe_pending_events, event_request,
                              observed_effects)
 from .fleet_native import fleet_request
@@ -822,6 +823,38 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
     def get_wiki_reference(title: str) -> dict:
         """Read an imported Wiki reference page with its URL, revision, license and version."""
         return knowledge().wiki_page(title)
+
+    @server.tool(annotations=readonly)
+    async def plan_intent(goals: list[dict], snapshot: str | None = None) -> dict:
+        """Propose execute_plan steps for 1..20 structured goals; never sends anything to the game.
+
+        Each goal is {goal:<name>, ...fields}, e.g. {goal:'research', area:'physics',
+        technology:'tech_lasers_1'}, {goal:'build_district', planet:'3', district:'district_city'},
+        {goal:'set_policy', policy:'economic_policy', option:'civilian_economy'},
+        {goal:'close_borders', target:'65'}. Step kind names with exact step fields work too.
+        Steps are validated like execute_plan and against versioned knowledge when attached.
+        With snapshot (from observe_empire), the latest already-read observation must have
+        that snapshot and each step is resolved against it; no dump is requested.
+        """
+        state = None
+        if snapshot is not None:
+            try:
+                observed = await asyncio.to_thread(connection.observe)
+            except (ValueError, OSError, RuntimeError) as error:
+                return {"status": "blocked", "side_effects": "none", "reason": "No observation to check against: " + str(error)}
+            current = observed.get("snapshot") if isinstance(observed, dict) else None
+            if current != snapshot or not isinstance(observed.get("state"), dict):
+                return {"status": "stale", "side_effects": "none", "snapshot": current,
+                        "reason": "The latest observation is not the supplied snapshot; read observe_empire again"}
+            state = observed["state"]
+        try:
+            game_knowledge_bundle = knowledge()
+        except ValueError:
+            game_knowledge_bundle = None
+        try:
+            return propose_plan(goals, state=state, snapshot=snapshot, knowledge=game_knowledge_bundle)
+        except ValueError as error:
+            return {"status": "blocked", "side_effects": "none", "reason": str(error)}
 
     @server.tool(annotations=readonly)
     def knowledge_status() -> dict:

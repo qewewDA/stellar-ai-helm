@@ -102,6 +102,7 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "list_pending_events", "choose_event_option",
                           "list_diplomacy", "close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
+                          "plan_intent",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}
     assert tools["observe_empire"].annotations.readOnlyHint is True
     assert tools["list_pending_events"].annotations.readOnlyHint is True
