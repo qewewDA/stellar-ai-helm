@@ -97,6 +97,7 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "issue_order", "select_research", "queue_district", "queue_building", "set_paused", "list_actions", "status", "stop_bridge",
                           "queue_ship", "upgrade_building", "demolish_building", "convert_zone", "cancel_construction",
                           "survey_planet", "build_station", "colonize_planet", "queue_colony_ship",
+                          "set_policy", "activate_edict", "deactivate_edict",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}
     assert tools["observe_empire"].annotations.readOnlyHint is True
@@ -633,3 +634,80 @@ def test_ship_mcp_requires_paid_postconditions_and_correlated_native_dispatch(co
     assert "# disarmed" in direct._configuration(config_path).inbox_path.read_text()
     if outcome not in {"paid", "rejected"}:
         assert connection.queue_ship("12", "7")["status"] == "blocked"
+
+
+class _CountryKnowledge:
+    bundle = {"game_version": "4.test"}
+
+    def __init__(self, records):
+        self.records, self.lookups = records, []
+
+    def lookup(self, category, object_id, sections=None):
+        self.lookups.append((category, object_id, sections))
+        return self.records.get(category + ":" + object_id, {"status": "not_found"})
+
+
+class _CountryConnection:
+    def __init__(self):
+        self.calls = []
+
+    def country_command(self, kind, definition=None, **payload):
+        self.calls.append((kind, definition, payload))
+        return {"status": "recorded"}
+
+
+COUNTRY_TOOLS = [
+    ("set_policy", {"policy_id": "economic_policy", "option_id": "economic_policy_civilian"}),
+    ("activate_edict", {"edict_id": "fortify_the_border"}),
+    ("deactivate_edict", {"edict_id": "fortify_the_border"}),
+]
+
+
+@pytest.mark.parametrize("name,arguments", COUNTRY_TOOLS)
+def test_country_tools_expose_only_exact_data_identifiers(config_path, name, arguments):
+    server = direct.build_direct_server(config_path)
+    tool = {tool.name: tool for tool in asyncio.run(server.list_tools())}[name]
+    assert set(tool.inputSchema["properties"]) == set(arguments) == set(tool.inputSchema["required"])
+    assert tool.annotations.readOnlyHint is False and tool.annotations.idempotentHint is False
+
+
+@pytest.mark.parametrize("name,arguments", COUNTRY_TOOLS)
+def test_country_tools_require_launcher_owned_backend_before_observation(config_path, monkeypatch, name, arguments):
+    monkeypatch.setattr(direct, "DirectObserver", lambda *_: pytest.fail("A missing native backend read a snapshot"))
+    knowledge = _CountryKnowledge({
+        "policies:economic_policy": {"status": "found", "definition": {"option": [{"name": "economic_policy_civilian"}]}},
+        "edicts:fortify_the_border": {"status": "found", "definition": {"resources": {"cost": {"unity": 10}}}}})
+    assert invoke(direct.build_direct_server(config_path, game_knowledge=knowledge), name, arguments)["status"] == "blocked"
+    assert invoke(direct.build_direct_server(config_path, native_bridge=object(), game_knowledge=knowledge),
+                  name, arguments)["status"] == "blocked"
+    assert not direct._configuration(config_path).state_dir.exists()
+
+
+def test_country_tools_block_without_exact_knowledge_and_pass_only_bundle_facts(config_path):
+    connection = _CountryConnection()
+    server = direct.build_direct_server(config_path, connection=connection)
+    assert invoke(server, "set_policy", COUNTRY_TOOLS[0][1])["status"] == "blocked"
+    assert invoke(server, "activate_edict", COUNTRY_TOOLS[1][1])["status"] == "blocked"
+    assert connection.calls == []
+    knowledge = _CountryKnowledge({
+        "policies:economic_policy": {"status": "found", "definition": {"option": [
+            {"name": "economic_policy_civilian"}, {"name": "economic_policy_balanced"}]}},
+        "edicts:fortify_the_border": {"status": "found", "definition": {"resources": {
+            "cost": {"unity": 10, "multiplier": "value:edict_size_effect"}}}}})
+    server = direct.build_direct_server(config_path, connection=connection, game_knowledge=knowledge)
+    for name, arguments in COUNTRY_TOOLS:
+        assert invoke(server, name, arguments) == {"status": "recorded"}
+    (policy, edict, removal) = connection.calls
+    assert policy[0] == "set_policy" and policy[1].options == ("economic_policy_civilian", "economic_policy_balanced")
+    assert policy[2] == {"policy": "economic_policy", "option": "economic_policy_civilian"}
+    assert edict[1].base_cost == (("unity", 10.0),) and edict[1].scaled is True
+    assert removal == ("deactivate_edict", None, {"edict": "fortify_the_border"})
+    assert ("edicts", "fortify_the_border", ["option", "resources"]) in knowledge.lookups
+
+
+@pytest.mark.parametrize("value", ["fortify\neffect cash=1", "Fortify", "", "a" * 130])
+def test_country_tool_identifiers_cannot_be_console_code(config_path, monkeypatch, value):
+    monkeypatch.setattr(direct, "DirectObserver", lambda *_: pytest.fail("An invalid identifier read a snapshot"))
+    with pytest.raises(ToolError):
+        invoke(direct.build_direct_server(config_path, native_bridge=object()), "deactivate_edict",
+               {"edict_id": value})

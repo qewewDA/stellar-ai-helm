@@ -12,6 +12,9 @@ LEGACY_SHA256 = "400df27c82ddc845aa9dce79bd468d81f18f060d299cd263e3afa93aef4f7a8
 CYGNUS_453_SHA256 = "2f0fc2a91ccec9f77d390a5d198195927158c22444216a03596a23007fb3eafb"
 SOURCES = ("native_research.js", "native_ship.js", "native_ship_colony.js",
            "native_planet.js", "native_fleet.js")
+# Statically located in the 4.5.2 executable only (policy/edict commands).
+# The 4.5.3 translation keeps exactly SOURCES, so it never maps these RVAs.
+LEGACY_ONLY_SOURCES = ("native_country.js",)
 
 # Each entry was re-identified in the 4.5.3 executable; this is not a uniform shift.
 _RVA_453 = {
@@ -111,7 +114,8 @@ def render_native_source(build: NativeBuild, root: Path) -> str:
         raise ValueError("Unreviewed native profile")
     source = "\n".join((Path(root) / name).read_text(encoding="utf-8") for name in SOURCES)
     if build.sha256 == LEGACY_SHA256:
-        return source
+        return "\n".join([source, *((Path(root) / name).read_text(encoding="utf-8")
+                                    for name in LEGACY_ONLY_SOURCES)])
 
     seen = set()
 

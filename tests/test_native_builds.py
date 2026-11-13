@@ -373,11 +373,13 @@ def test_forged_native_build_objects_are_rejected():
 # --------------------------------------------------------------------------- rendering
 
 
-def test_legacy_render_is_byte_identical_to_the_five_packaged_sources():
-    expected = "\n".join((PACKAGE_DIR / name).read_text(encoding="utf-8") for name in native_builds.SOURCES)
+def test_legacy_render_is_byte_identical_to_the_packaged_sources():
+    names = native_builds.SOURCES + native_builds.LEGACY_ONLY_SOURCES
+    expected = "\n".join((PACKAGE_DIR / name).read_text(encoding="utf-8") for name in names)
     rendered = _rendered(LEGACY)
     assert rendered == expected
     assert len(native_builds.SOURCES) == 5
+    assert native_builds.LEGACY_ONLY_SOURCES == ("native_country.js",)
     assert "0x6d1b90" in rendered and "0x6d2a80" not in rendered
     assert GUARD_ERROR not in rendered and "rpc.exports.enqueue =" not in rendered
 

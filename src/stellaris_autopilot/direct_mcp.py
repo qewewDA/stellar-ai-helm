@@ -42,6 +42,7 @@ from .knowledge import GameKnowledge
 from .ship_commands import ship_request
 from .colony_ships import colony_ship_request
 from .planet_commands import planet_request
+from .country_commands import country_request, definition_from_record
 from .fleet_native import fleet_request
 from .extended_native import REQUEST_TYPES, RESOLVED_TYPES, resolve_extended, verify_extended
 from .assistant_prompts import register_prompts
@@ -303,6 +304,9 @@ class DirectConnection:
 
     def fleet_command(self, kind: str, fleet_id: str, planet_id: str, station_type=None) -> dict:
         return self._extended(fleet_request(kind, fleet_id, planet_id, station_type))
+
+    def country_command(self, kind: str, definition=None, **payload) -> dict:
+        return self._extended(country_request(kind, definition, **payload))
 
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
@@ -884,6 +888,50 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         """
         return await call_write(connection.fleet_command, "colonize_planet", fleet_id, planet_id)
 
+    def country_definition(kind: str, category: str, object_id: str):
+        try:
+            return definition_from_record(kind, knowledge().lookup(category, object_id, ["option", "resources"]))
+        except ValueError as error:
+            return {"status": "blocked", "reason": "Exact definition facts are required before submission: " + str(error)}
+
+    @server.tool(annotations=writing)
+    async def set_policy(policy_id: str, option_id: str) -> dict:
+        """Change one active empire policy to another option through the normal native command.
+
+        The option must belong to the policy in versioned knowledge, differ from
+        the observed selection and be outside the 10-year change cooldown. The
+        game's validator checks potential/allow. Policies cost no resources;
+        verification needs that exact selection dated today and nothing else changed.
+        """
+        definition = country_definition("set_policy", "policies", policy_id)
+        if isinstance(definition, dict):
+            return definition
+        return await call_write(connection.country_command, "set_policy", definition,
+                                policy=policy_id, option=option_id)
+
+    @server.tool(annotations=writing)
+    async def activate_edict(edict_id: str) -> dict:
+        """Activate one edict through the normal native command and verify its exact payment.
+
+        Requires a paused session and the edict's base cost from versioned
+        knowledge. The game checks availability, capacity and affordability.
+        Verification needs the new edict dated today and a payment of exactly
+        the base cost times one size multiplier, with nothing else changed.
+        """
+        definition = country_definition("activate_edict", "edicts", edict_id)
+        if isinstance(definition, dict):
+            return definition
+        return await call_write(connection.country_command, "activate_edict", definition, edict=edict_id)
+
+    @server.tool(annotations=writing)
+    async def deactivate_edict(edict_id: str) -> dict:
+        """Cancel one observed active edict through the normal native command.
+
+        The game rejects edicts still inside their minimum duration. Verification
+        needs exactly that edict removed and no refund or other change.
+        """
+        return await call_write(connection.country_command, "deactivate_edict", None, edict=edict_id)
+
     @server.tool(annotations=readonly)
     def list_actions() -> list[dict]:
         """Read the locally authorized direct actions and their effects."""
@@ -913,7 +961,10 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "cancel_construction": "Cancel one exact planet queue item and verify its refund",
                                     "survey_planet": "Order one science fleet to survey one exact observed body",
                                     "build_station": "Order one constructor to build a normal mining/research station or outpost",
-                                    "colonize_planet": "Order one colony fleet to colonize one exact observed planet"}[action]}
+                                    "colonize_planet": "Order one colony fleet to colonize one exact observed planet",
+                                    "set_policy": "Change one active policy to a known option, respecting its cooldown",
+                                    "activate_edict": "Activate one edict with normal legality checks and exact payment",
+                                    "deactivate_edict": "Cancel one active edict normally, verifying no refund"}[action]}
                    for action in config.allowed_native_actions])
 
     @server.tool(annotations=readonly)

@@ -7,6 +7,7 @@ from typing import Any, Iterator
 import zipfile
 
 from .pdx import PDXError, PDXNode, loads
+from .country_commands import observe_country_controls
 
 
 class SaveError(ValueError):
@@ -923,6 +924,7 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
         'research': research,
         'research_status': _research_status(unique_country),
         'empire_build': _empire_build(unique_country),
+        'country_controls': observe_country_controls(unique_country),
         'construction': _construction(root, country_id, country_known=unique_country is not None),
         'shipbuilding': observe_shipyards(root, country_id, fleets) if fleets_known else {},
         'space': observe_space(root, country_id),

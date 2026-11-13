@@ -17,7 +17,8 @@ _ACTION_KINDS = frozenset({
     "probe_connection", "hold_military_fleets", "issue_order", "select_research", "queue_district",
     "queue_building", "set_paused", "queue_ship", "queue_colony_ship", "upgrade_building",
     "demolish_building", "convert_zone", "cancel_construction", "survey_planet", "build_station",
-    "colonize_planet", "fleet_move", "fleet_wait", "fleet_orbit", "fleet_stop",
+    "colonize_planet", "fleet_move", "fleet_wait", "fleet_orbit", "fleet_stop", "set_policy",
+    "activate_edict", "deactivate_edict",
 })
 
 

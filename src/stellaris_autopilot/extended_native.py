@@ -9,10 +9,13 @@ from .planet_commands import (PlanetRequest, ResolvedPlanetCommand, resolve_plan
 from .fleet_native import (FleetRequest, FleetOperation, fleet_request, resolve_fleet, verify_fleet)
 from .colony_ships import (ColonyShipRequest, ColonyShipConstruction, colony_ship_request,
                            resolve_colony_ship, verify_colony_ship, colony_ship_payload)
+from .country_commands import (CountryRequest, ResolvedCountryCommand, resolve_country_command,
+                               verify_country_command, native_country_payload)
 
 
-REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest)
-RESOLVED_TYPES = (ShipConstruction, ResolvedPlanetCommand, FleetOperation, ColonyShipConstruction)
+REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest)
+RESOLVED_TYPES = (ShipConstruction, ResolvedPlanetCommand, FleetOperation, ColonyShipConstruction,
+                  ResolvedCountryCommand)
 
 
 def resolve_extended(state, request):
@@ -24,6 +27,8 @@ def resolve_extended(state, request):
         return resolve_planet_command(state, request)
     if isinstance(request, FleetRequest):
         return resolve_fleet(state, request)
+    if isinstance(request, CountryRequest):
+        return resolve_country_command(state, request)
     raise ValueError("Unsupported extended native request")
 
 
@@ -36,6 +41,8 @@ def verify_extended(before, after, command):
         return verify_planet_command(before, after, command)
     if isinstance(command, FleetOperation):
         return verify_fleet(before, after, command)
+    if isinstance(command, ResolvedCountryCommand):
+        return verify_country_command(before, after, command)
     return False
 
 
@@ -56,4 +63,6 @@ def extended_payload(command, token):
         fleet_request(command.kind, command.fleet_id, command.planet_id, command.station_type)
         _id(command.system_id)
         return {"kind": command.kind, "country_id": "0", "token": token, **command.to_dict()}
+    if isinstance(command, ResolvedCountryCommand):
+        return native_country_payload(command, token)
     raise ValueError("Unsupported resolved native command")
