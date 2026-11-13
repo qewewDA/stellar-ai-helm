@@ -807,8 +807,8 @@ def test_event_option_requires_a_launcher_owned_backend_before_observation(confi
 
 def test_list_pending_events_reads_the_snapshot_without_publishing(config_path):
     pending = {"known": True, "selections": [], "by_id": {
-        "12": {"id": "12", "event_id": "qs_test.1", "country": "0", "auto_resolve_date": None, "scope": None},
-        "13": {"id": "13", "event_id": "qs_test.1", "country": "16777222", "auto_resolve_date": None, "scope": None}}}
+        "12": {"id": "12", "event_id": "qs_test.1", "country": "0", "date": None, "scope": None},
+        "13": {"id": "13", "event_id": "qs_test.1", "country": "16777222", "date": None, "scope": None}}}
     connection = _EventConnection({"date": "2207.01.11", "country_id": "0", "pending_events": pending})
     result = invoke(direct.build_direct_server(config_path, connection=connection), "list_pending_events")
     assert result["status"] == "observed" and result["snapshot"] == "s1" and result["event_text_attached"] is False
@@ -825,7 +825,7 @@ def test_choose_event_option_refuses_ai_country_events_before_any_submission(con
     before = baseline()
     before.state["pending_events"] = {"known": True, "selections": [], "by_id": {
         "53": {"id": "53", "event_id": "first_contact.1", "country": "16777222",
-               "auto_resolve_date": "2209.12.16", "scope": {"type": "first_contact", "id": "24"}}}}
+               "date": "2209.12.16", "scope": {"type": "first_contact", "id": "24"}}}}
     observer = configure_observer(monkeypatch, before)
     backend = SimulatedShipNative(observer)
     with pytest.raises(ValueError, match="another country"):

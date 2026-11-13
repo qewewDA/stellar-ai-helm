@@ -84,9 +84,10 @@ def observe_pending_events(root: PDXNode) -> dict:
     """Open player events from the game state writer's top-level ``player_event`` blocks.
 
     Live 4.5.2 dump (2207.01.11): ``player_event = { id=36 event="first_contact.1"
-    date="2207.05.07" scope={...} country=0 }``; ``date`` is in the future and
-    is reported as the auto-resolve date, and the history records earlier
-    automatic choices as ``human=-1``.
+    date="2207.05.07" scope={...} country=0 }``. ``date`` is passed through
+    unchanged; its meaning is unproven (an AI empire's event dated 2209.12.16
+    was resolved by 2207.10.07). The history records game/AI choices as
+    ``human=-1`` and a choice made through this command as ``human=1``.
     """
     result = {"known": False, "by_id": {}, "selections": []}
     if not isinstance(root, PDXNode) or len(root.get_all("open_player_event_selection_history")) != 1:
@@ -104,7 +105,7 @@ def observe_pending_events(root: PDXNode) -> dict:
                 or (date is not None and (not isinstance(date, str) or not _DATE.fullmatch(date)))):
             return result
         found[identifier] = {"id": identifier, "event_id": event_id, "country": country,
-                             "auto_resolve_date": date, "scope": _scope(_one(node, "scope"))}
+                             "date": date, "scope": _scope(_one(node, "scope"))}
     selections = _selections(_one(root, "open_player_event_selection_history"))
     if selections is None:
         return result

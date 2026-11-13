@@ -70,9 +70,9 @@ def test_pending_events_follow_the_save_writer_blocks():
     observed = observe_pending_events(_root())
     assert observed["known"] is True and set(observed["by_id"]) == {"12", "13", "15"}
     assert observed["by_id"]["12"] == {"id": "12", "event_id": "first_contact.1", "country": "0",
-                                       "auto_resolve_date": "2207.05.07",
+                                       "date": "2207.05.07",
                                        "scope": {"type": "first_contact", "id": "14"}}
-    assert observed["by_id"]["15"]["auto_resolve_date"] is None and observed["by_id"]["15"]["country"] == "8"
+    assert observed["by_id"]["15"]["date"] is None and observed["by_id"]["15"]["country"] == "8"
     assert observed["selections"] == [{"player_event": "1", "human": -1, "option": 0}]
 
 
@@ -204,7 +204,7 @@ def test_verification_needs_the_chosen_event_gone_on_the_same_day_and_others_unc
     assert verify_event_command(before, _after(before), command) is True
     follow_up = _after(before)
     follow_up["pending_events"]["by_id"]["14"] = {"id": "14", "event_id": "qs_test.2", "country": "0",
-                                                  "auto_resolve_date": None, "scope": None}
+                                                  "date": None, "scope": None}
     assert verify_event_command(before, follow_up, command) is True
     assert verify_event_command(before, copy.deepcopy(before), command) is False
     assert verify_event_command(before, _after(before, date="2207.01.12"), command) is False
@@ -212,7 +212,7 @@ def test_verification_needs_the_chosen_event_gone_on_the_same_day_and_others_unc
     del other_gone["pending_events"]["by_id"]["12"]
     assert verify_event_command(before, other_gone, command) is False
     other_changed = _after(before)
-    other_changed["pending_events"]["by_id"]["12"]["auto_resolve_date"] = "2207.06.01"
+    other_changed["pending_events"]["by_id"]["12"]["date"] = "2207.06.01"
     assert verify_event_command(before, other_changed, command) is False
     unknown = _after(before)
     unknown["pending_events"]["known"] = False
