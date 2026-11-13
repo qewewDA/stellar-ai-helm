@@ -266,10 +266,17 @@ class AttachedRuntime:
         with self.mutex:
             if self.closed or self.connection is None:
                 raise CampaignError("The existing-game connection is closed")
+            # An unresolved operation also blocks the pause command itself, so
+            # report it first instead of masking it as a pause failure.
+            if _PreviewJournal(self.state_dir / "journal.sqlite").unresolved():
+                raise CampaignError("Unresolved operations block the checkpoint; inspect them first")
             if self.connection.request_observation().get("status") != "observed":
                 raise CampaignError("Cannot refresh before saving the attached game")
-            if self.connection.set_paused(True).get("status") != "pause_verified":
-                raise CampaignError("Cannot verify pause before saving")
+            paused = self.connection.set_paused(True)
+            if paused.get("status") != "pause_verified":
+                reason = paused.get("reason")
+                raise CampaignError("Cannot verify pause before saving"
+                                    + (": " + reason if isinstance(reason, str) and reason else ""))
             config = load_direct_config(self.config_path)
             with _controller_lock(config):
                 if _PreviewJournal(self.state_dir / "journal.sqlite").unresolved():

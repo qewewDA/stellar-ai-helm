@@ -21,7 +21,7 @@ KINDS = frozenset({"set_policy", "activate_edict", "deactivate_edict"})
 # 0x6d7d10 from 0x3115674). The native validator remains authoritative.
 POLICY_YEARS = 10
 _KEY = re.compile(r"[a-z][a-z0-9_]{0,119}\Z", re.ASCII)
-_DATE = re.compile(r"(\d{1,5})\.(\d{2})\.(\d{2})\Z", re.ASCII)
+_DATE = re.compile(r"(-?\d{1,5})\.(\d{2})\.(\d{2})\Z", re.ASCII)
 _UNKNOWN = {"known": False, "policies": {}, "edicts": {}}
 
 
@@ -31,11 +31,14 @@ def _key(value, label: str) -> str:
     return value
 
 
-def _date(value) -> tuple[int, int, int] | None:
+def _date(value, *, sentinel: bool = False) -> tuple[int, int, int] | None:
+    """A game date; negative years are accepted only where a sentinel is expected."""
     match = _DATE.fullmatch(value) if isinstance(value, str) else None
     if match is None:
         return None
     year, month, day = (int(part) for part in match.groups())
+    if year < 0 and not sentinel:
+        return None
     return (year, month, day) if 1 <= month <= 12 and 1 <= day <= 30 else None
 
 
@@ -80,9 +83,11 @@ def observe_country_controls(country: PDXNode | None) -> dict:
             fields = (_fields(entry, {"edict", "date", "perpetual", "start_date"}, {"edict", "date", "start_date"})
                       if key is None else None)
             if (fields is None or not isinstance(fields["edict"], str) or _KEY.fullmatch(fields["edict"]) is None
-                    or fields["edict"] in edicts or _date(fields["date"]) is None
-                    or _date(fields["start_date"]) is None
-                    or fields.get("perpetual", "yes") != "yes"):
+                    or fields["edict"] in edicts or fields.get("perpetual", "yes") != "yes"
+                    # Perpetual (length -1) edicts carry a negative sentinel end
+                    # date, e.g. date="-5070.07.21" perpetual=yes (4.5.2 dump).
+                    or _date(fields["date"], sentinel="perpetual" in fields) is None
+                    or _date(fields["start_date"]) is None):
                 return dict(_UNKNOWN)
             edicts[fields["edict"]] = {"date": fields["date"], "start_date": fields["start_date"],
                                        "perpetual": "perpetual" in fields}
@@ -225,9 +230,8 @@ def resolve_country_command(state: dict, request: CountryRequest) -> ResolvedCou
         raise ValueError("Resource stockpiles are unobservable")
     if request.kind == "activate_edict" and (definition is None or not definition.base_cost):
         raise ValueError("Activating an edict needs its exact base cost from versioned game knowledge")
-    if request.kind == "activate_edict" and any(
-            resources.get(key, 0) < value for key, value in definition.base_cost):
-        raise ValueError("The observed stockpile cannot pay the edict's base cost")
+    if request.kind == "activate_edict" and any(key not in resources for key, _ in definition.base_cost):
+        raise ValueError("The edict's cost resources are unobservable")
     active = request.edict in controls["edicts"]
     if request.kind == "activate_edict" and active:
         raise ValueError("The edict is already active")
@@ -281,7 +285,7 @@ def edict_payment(before: dict, after: dict) -> dict | None:
 
 
 def edict_cost_matches(spent: dict, definition: CountryDefinition | None) -> bool:
-    """Paid exactly the base cost times one common size multiplier (>= 1 when scaled)."""
+    """Paid exactly the base cost times one common positive size multiplier."""
     if definition is None or not definition.base_cost or not spent:
         return False
     base = dict(definition.base_cost)
@@ -293,8 +297,9 @@ def edict_cost_matches(spent: dict, definition: CountryDefinition | None) -> boo
         return False
     if not definition.scaled:
         return abs(ratio - 1.0) <= 1e-4
-    # value:edict_size_effect = 1 + 0.01 * empire_sprawl_over_cap, never below 1.
-    return 1.0 - 1e-4 <= ratio <= 100.0
+    # value:edict_size_effect is runtime-scaled (observed 0.5 in a 4.5.2 start),
+    # so any positive factor is accepted when it is shared by every cost key.
+    return 1e-4 < ratio <= 100.0
 
 
 def verify_country_command(before: dict, after: dict, command: ResolvedCountryCommand) -> bool:
@@ -302,8 +307,8 @@ def verify_country_command(before: dict, after: dict, command: ResolvedCountryCo
 
     Policies cost nothing in 4.5.2 (no cost block, no payment call in the
     native setter), so every stockpile must stay exact. Activating an edict
-    must spend exactly its known base cost times one size multiplier and
-    nothing else. Deactivation must not refund or charge anything.
+    must spend exactly its known base cost times one positive size multiplier
+    shared by every cost key, and nothing else. Deactivation must not refund or charge anything.
     """
     if type(command) is not ResolvedCountryCommand:
         return False

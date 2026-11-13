@@ -267,7 +267,23 @@ def test_checkpoint_blocks_on_unresolved_operation_before_requesting_a_dump(tmp_
         env.runtime.checkpoint_game()
 
     assert fresh_calls == [] and packages == []
+    # The pause command would itself be journal-blocked; never mask this as a pause failure.
+    assert env.runtime.connection.calls == []
     assert env.process.closes == 0 and env.native.closed == 0
+
+
+def test_checkpoint_pause_failure_reports_the_pause_reason(tmp_path, monkeypatch):
+    env = make_runtime(tmp_path)
+    monkeypatch.setattr(module, "_PreviewJournal", lambda path: Journal())
+    monkeypatch.setattr(env.runtime.connection, "set_paused",
+                        lambda paused: {"status": "blocked", "reason": "Protected modal pause"})
+    monkeypatch.setattr(env.runtime, "_fresh", lambda: pytest.fail("A failed pause read a snapshot"))
+    packages = []
+    patch_package(monkeypatch, packages)
+
+    with pytest.raises(CampaignError, match="Cannot verify pause before saving: Protected modal pause"):
+        env.runtime.checkpoint_game()
+    assert packages == []
 
 
 def test_checkpoint_rejects_an_unpaused_native_receipt(tmp_path, monkeypatch):

@@ -157,8 +157,10 @@ def test_edict_resolution_rejects_active_inactive_unaffordable_and_unknown_cost(
         resolve_extended(_state(), _edict(edict="farming_subsidies"))
     with pytest.raises(ValueError, match="not active"):
         resolve_extended(_state(), _edict("deactivate_edict"))
-    with pytest.raises(ValueError, match="cannot pay"):
-        resolve_extended(_state(unity=9.5), _edict())
+    state = _state()
+    state["resources"].pop("unity")
+    with pytest.raises(ValueError, match="unobservable"):
+        resolve_extended(state, _edict())
     with pytest.raises(ValueError, match="base cost"):
         resolve_extended(_state(), cc.country_request("activate_edict", None, edict="fortify_the_border"))
     state = _state()
@@ -215,8 +217,8 @@ def test_edict_activation_requires_exact_scaled_unity_payment():
     before = _state()
     command = resolve_extended(before, _edict())
     assert verify_extended(before, _after_edict(), command) is True
-    assert verify_extended(before, _after_edict(unity=39.0), command) is True  # sprawl multiplier 1.1
-    assert verify_extended(before, _after_edict(unity=41.0), command) is False  # below base cost
+    assert verify_extended(before, _after_edict(unity=39.0), command) is True  # size factor 1.1
+    assert verify_extended(before, _after_edict(unity=45.0), command) is True  # size factor 0.5 (live 4.5.2)
     assert verify_extended(before, _after_edict(unity=50.0), command) is False  # no payment
     assert verify_extended(before, _after_edict(influence=90.0), command) is False  # wrong resource
     assert verify_extended(before, _after_edict(energy=210.0), command) is False  # a gain
@@ -254,3 +256,57 @@ def test_payload_rejects_tampered_resolved_commands():
         extended_payload(command, "not-a-token")
     with pytest.raises(ValueError):
         extended_payload(cc.ResolvedCountryCommand(_edict(), current_option="x"), TOKEN)
+
+
+# The exact block written by the live 4.5.2 game after activating fortify_the_border
+# (2200.01.01 United Nations of Earth start, size factor 0.5: unity 50 -> 45).
+LIVE_PERPETUAL = (
+    'edicts=\n\t\t{\n\t\t\t\n\t\t\t{\n\t\t\t\tedict="fortify_the_border"\n'
+    '\t\t\t\tdate=\t\t\t\t"-5070.07.21"\n\t\t\t\tperpetual=yes\n'
+    '\t\t\t\tstart_date=\t\t\t\t"2200.01.01"\n\t\t\t}\n \n\t\t}'
+)
+
+
+def test_live_perpetual_edict_with_sentinel_date_is_observed():
+    controls = _controls(LIVE_PERPETUAL)
+    assert controls["known"] is True and len(controls["policies"]) == 3
+    assert controls["edicts"] == {"fortify_the_border": {
+        "date": "-5070.07.21", "start_date": "2200.01.01", "perpetual": True}}
+
+
+@pytest.mark.parametrize("entry", [
+    'edicts={ { edict="a" date="-5070.07.21" start_date="2200.01.01" } }',  # sentinel needs perpetual
+    'edicts={ { edict="a" date="-5070.07.21" perpetual=yes start_date="-2200.01.01" } }',
+    'edicts={ { edict="a" date="-5070.13.21" perpetual=yes start_date="2200.01.01" } }',
+    'edicts={ { edict="a" date="-5070.07.21" perpetual=no start_date="2200.01.01" } }',
+    'edicts={ { edict="a" date="--5070.07.21" perpetual=yes start_date="2200.01.01" } }',
+])
+def test_sentinel_dates_are_accepted_only_for_perpetual_end_dates(entry):
+    assert _controls(entry)["known"] is False
+
+
+def test_negative_policy_dates_stay_unobservable():
+    text = COUNTRY.replace('date="2195.01.01"', 'date="-5070.07.21"')
+    assert cc.observe_country_controls(loads(text % "").get("c"))["known"] is False
+
+
+def test_live_activation_with_half_size_factor_verifies_and_deactivation_resolves():
+    before = _state(extra="")
+    command = resolve_extended(before, _edict())
+    after = _state(extra=LIVE_PERPETUAL, unity=45.0)
+    assert verify_extended(before, after, command) is True
+    assert verify_extended(before, _state(extra=LIVE_PERPETUAL, unity=45.0, influence=99.0), command) is False
+    assert verify_extended(before, _state(extra=LIVE_PERPETUAL, unity=45.0, energy=201.0), command) is False
+    removal = resolve_extended(after, _edict("deactivate_edict"))
+    assert removal.kind == "deactivate_edict"
+    cleared = _state(extra="", unity=45.0)
+    assert verify_extended(after, cleared, removal) is True
+    assert verify_extended(after, _state(extra="", unity=50.0), removal) is False
+
+
+def test_size_factor_must_be_shared_by_every_cost_key():
+    definition = cc.CountryDefinition(base_cost=(("energy", 20.0), ("unity", 10.0)), scaled=True)
+    assert cc.edict_cost_matches({"energy": 10.0, "unity": 5.0}, definition) is True
+    assert cc.edict_cost_matches({"energy": 20.0, "unity": 5.0}, definition) is False
+    assert cc.edict_cost_matches({"unity": 5.0}, definition) is False
+    assert cc.edict_cost_matches({"energy": 0.0, "unity": 0.0}, definition) is False
