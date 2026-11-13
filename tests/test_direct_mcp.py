@@ -806,12 +806,30 @@ def test_event_option_requires_a_launcher_owned_backend_before_observation(confi
 
 
 def test_list_pending_events_reads_the_snapshot_without_publishing(config_path):
-    pending = {"known": True, "selections": [], "by_id": {"12": {"id": "12", "event_id": "qs_test.1", "expired": False,
-                                                               "index": 0, "picture": None, "scope": None}}}
-    connection = _EventConnection({"date": "2207.01.11", "pending_events": pending})
+    pending = {"known": True, "selections": [], "by_id": {
+        "12": {"id": "12", "event_id": "qs_test.1", "country": "0", "auto_resolve_date": None, "scope": None},
+        "13": {"id": "13", "event_id": "qs_test.1", "country": "16777222", "auto_resolve_date": None, "scope": None}}}
+    connection = _EventConnection({"date": "2207.01.11", "country_id": "0", "pending_events": pending})
     result = invoke(direct.build_direct_server(config_path, connection=connection), "list_pending_events")
     assert result["status"] == "observed" and result["snapshot"] == "s1" and result["event_text_attached"] is False
     assert [event["player_event_id"] for event in result["events"]] == ["12"]
     assert connection.calls == []
     unknown = _EventConnection({"date": "2207.01.11", "pending_events": {"known": False}})
     assert invoke(direct.build_direct_server(config_path, connection=unknown), "list_pending_events")["status"] == "blocked"
+
+
+def test_choose_event_option_refuses_ai_country_events_before_any_submission(config_path, monkeypatch):
+    raw = json.loads(config_path.read_text())
+    raw["allowed_native_actions"] = ["choose_event_option"]
+    config_path.write_text(json.dumps(raw))
+    before = baseline()
+    before.state["pending_events"] = {"known": True, "selections": [], "by_id": {
+        "53": {"id": "53", "event_id": "first_contact.1", "country": "16777222",
+               "auto_resolve_date": "2209.12.16", "scope": {"type": "first_contact", "id": "24"}}}}
+    observer = configure_observer(monkeypatch, before)
+    backend = SimulatedShipNative(observer)
+    with pytest.raises(ValueError, match="another country"):
+        direct.DirectConnection(config_path, native_bridge=backend).event_command(
+            "choose_event_option", player_event_id="53", option_index=0)
+    assert not backend.submissions and not backend.queries and not backend.cancellations
+    assert not direct._configuration(config_path).state_dir.exists()

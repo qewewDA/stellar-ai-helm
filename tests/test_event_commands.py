@@ -153,7 +153,8 @@ def test_catalog_resolves_definition_options_and_language(game_dir, tmp_path):
 
 def test_described_pending_events_keep_unknown_definitions_visible(game_dir):
     result = describe_pending_events(_state(), EventCatalog(game_dir))
-    assert result["known"] is True and [event["player_event_id"] for event in result["events"]] == ["12", "13", "15"]
+    assert result["known"] is True and [event["player_event_id"] for event in result["events"]] == ["12", "13"]
+    assert result["other_country_event_count"] == 1 and result["country_id"] == "0"
     assert result["events"][0]["definition"]["definition_found"] is False
     assert result["events"][1]["definition"]["title"]["text"] == "Signal"
     assert describe_pending_events({"pending_events": {"known": False}}, None)["known"] is False
@@ -238,3 +239,25 @@ def test_observed_effects_report_resources_follow_ups_and_changed_sections():
     assert effects == {"resources": {"energy": {"before": 100.0, "after": 150.0}}, "new_selections": [],
                        "new_pending_events": ["14"], "removed_pending_events": ["13"],
                        "changed_sections": ["country_controls"]}
+
+
+@pytest.mark.parametrize("country", ["8", "16777222", None])
+def test_other_countries_events_are_never_chosen(country):
+    state = _state()
+    entry = state["pending_events"]["by_id"]["12"]
+    entry["country"] = country
+    with pytest.raises(ValueError, match="another country"):
+        resolve_event_command(state, event_request("choose_event_option", player_event_id="12", option_index=0))
+    from stellaris_autopilot.extended_native import resolve_extended
+    with pytest.raises(ValueError, match="another country"):
+        resolve_extended(state, event_request("choose_event_option", player_event_id="12", option_index=0))
+    listed = describe_pending_events(state, None)
+    assert "12" not in [event["player_event_id"] for event in listed["events"]]
+    assert listed["other_country_event_count"] == 2
+
+
+def test_events_are_refused_when_the_snapshot_is_not_the_local_player():
+    state = _state()
+    state["country_id"] = "8"
+    with pytest.raises(ValueError, match="country"):
+        resolve_event_command(state, event_request("choose_event_option", player_event_id="12", option_index=0))

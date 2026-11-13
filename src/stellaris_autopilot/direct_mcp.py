@@ -1005,6 +1005,8 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         whether it is conditional. Every open event needs an option. Text is
         reference data; conditional text is flagged, never guessed. Never
         publishes a command. Use request_observation first for a fresh dump.
+        Only the local player's events are listed; other empires' open events
+        stay with the game's own AI and appear only as other_country_event_count.
         """
         observed = await call_write(connection.observe)
         state = observed.get("state") if isinstance(observed, dict) else None
@@ -1027,7 +1029,7 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         """Choose one option of one open event popup through the normal event option command.
 
         Read player_event_id and option indexes from list_pending_events.
-        Requires a paused session. The game's validator decides whether the
+        Refuses any event that is not the local player's own. Requires a paused session. The game's validator decides whether the
         option is allowed. Verification needs that open event gone on the same
         day with every other pending event unchanged; option effects are
         reported in observed_effects, not assumed.

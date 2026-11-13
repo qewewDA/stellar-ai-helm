@@ -244,11 +244,18 @@ def describe_pending_events(state: dict, catalog: EventCatalog | None) -> dict:
     pending = state.get("pending_events") if isinstance(state, dict) else None
     if not isinstance(pending, dict) or pending.get("known") is not True:
         return {"known": False, "events": [], "reason": "Pending events are not exactly observable in this snapshot"}
+    country = str(state.get("country_id", "0"))
     events = []
+    others = 0
     for identifier, entry in sorted(pending["by_id"].items(), key=lambda item: int(item[0])):
+        # The save also lists events open for AI empires (live: country=16777222); only ours are choosable.
+        if entry["country"] != country:
+            others += 1
+            continue
         detail = catalog.describe(entry["event_id"]) if catalog is not None else {"definition_found": False}
         events.append({**entry, "player_event_id": identifier, "definition": detail})
-    return {"known": True, "date": state.get("date"), "events": events}
+    return {"known": True, "date": state.get("date"), "country_id": country, "events": events,
+            "other_country_event_count": others}
 
 
 @dataclass(frozen=True)
@@ -308,8 +315,9 @@ def resolve_event_command(state: dict, request: EventRequest) -> ResolvedEventCo
     entry = _pending(state).get(request.player_event_id)
     if not isinstance(entry, dict) or not _EVENT_ID.fullmatch(entry.get("event_id") or ""):
         raise ValueError("Select an observed pending event by its player_event_id")
-    if entry.get("country") != "0":
-        raise ValueError("The open event belongs to another country")
+    # Only the local player's events are ours; other empires' events stay with the game's own AI.
+    if entry.get("country") != "0" or str(state.get("country_id")) != "0":
+        raise ValueError("The open event belongs to another country; its choice is left to the game AI")
     return ResolvedEventCommand(request, entry["event_id"])
 
 
