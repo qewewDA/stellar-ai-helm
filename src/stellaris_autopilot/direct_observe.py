@@ -1,6 +1,7 @@
 """Read immutable snapshots of the direct bridge's frequently rewritten dump."""
 from __future__ import annotations
 
+from collections import Counter
 import copy
 import hashlib
 import os
@@ -8,15 +9,82 @@ from pathlib import Path
 import re
 import stat
 import sys
+import threading
 import time
 
 from .observe import Observation, _windows_change_time
-from .pdx import PDXError, PDXNode, loads
-from .saves import SaveError, normalize_gamestate
+from .pdx import PDXError, PDXNode, loads, loads_selected, without_cyclic_gc
+from .saves import SaveError, identity_spec, normalize_gamestate, normalize_identity
 
 
 _BRIDGE_FLAG = re.compile(r"qs_direct_(session|done|targets)_[0-9a-f]{32}\Z")
 _CHANGED = "Direct dump changed during observation; wait for the next stable snapshot"
+
+
+# Process-wide caches. Every key includes the SHA-256 of the exact immutable
+# byte copy, so a hit returns what parsing those same bytes would return. Only
+# the most recent snapshot is retained to bound memory (a full tree is roughly
+# ten times the dump size).
+_CACHE_LOCK = threading.Lock()
+_STATE_CACHE: dict[tuple, dict] = {}       # (digest, country_id, resolved path) -> normalized state
+_ROOT_CACHE: dict[str, PDXNode] = {}       # digest -> parsed tree, reused by checkpoint packaging
+_STATS: Counter = Counter()
+
+
+def parse_stats() -> dict:
+    """Counts of full parses, targeted extractions and cache hits since the last reset."""
+    with _CACHE_LOCK:
+        return dict(_STATS)
+
+
+def reset_parse_stats() -> None:
+    with _CACHE_LOCK:
+        _STATS.clear()
+
+
+def clear_observation_caches() -> None:
+    """Drop cached trees and states (tests, session close, memory pressure)."""
+    with _CACHE_LOCK:
+        _STATE_CACHE.clear()
+        _ROOT_CACHE.clear()
+
+
+def count(event: str) -> None:
+    with _CACHE_LOCK:
+        _STATS[event] += 1
+
+
+def cached_root(digest: str) -> PDXNode | None:
+    """The parsed tree for exactly these bytes, if the last full parse produced it."""
+    with _CACHE_LOCK:
+        root = _ROOT_CACHE.get(digest)
+        if root is not None:
+            _STATS["root_cache_hit"] += 1
+        return root
+
+
+def cached_state(digest: str, country_id: str, path: Path) -> dict | None:
+    """A copy of the normalized state an observation produced from exactly these bytes."""
+    key = (digest, str(country_id), str(Path(path).resolve()))
+    with _CACHE_LOCK:
+        state = _STATE_CACHE.get(key)
+        if state is None:
+            return None
+        _STATS["state_cache_hit"] += 1
+        return copy.deepcopy(state)
+
+
+def parse_full(data: bytes, digest: str) -> PDXNode:
+    """Full parse of exact bytes; decode/parse errors propagate unchanged."""
+    root = cached_root(digest)
+    if root is not None:
+        return root
+    root = loads(data.decode("utf-8-sig"))
+    with _CACHE_LOCK:
+        _STATS["full_parse"] += 1
+        _ROOT_CACHE.clear()
+        _ROOT_CACHE[digest] = root
+    return root
 
 
 def _flag_timestamp(value) -> bool:
@@ -110,18 +178,64 @@ class DirectObserver:
         except OSError as exc:
             raise SaveError(f"Cannot read direct dump {self.path.name}: {exc}") from exc
 
+    def is_stale(self, not_before: float) -> bool:
+        """True only when stat() proves the current dump predates ``not_before``.
+
+        Lets polling loops skip copying and parsing a generation that can never
+        satisfy a freshness requirement. Unreadable files return False so the
+        caller's normal read path reports them.
+        """
+        try:
+            return self.path.stat().st_mtime < not_before
+        except OSError:
+            return False
+
     def read(self) -> Observation:
         data, generation, modified_at = self._copy_snapshot()
         signature = (*generation, self.country_id)
         if signature == self._cached_signature and self._cached is not None:
+            count("generation_cache_hit")
             return Observation(copy.deepcopy(self._cached.state), self._cached.digest, self._cached.modified_at)
-        try:
-            root = loads(data.decode("utf-8-sig"))
-        except (UnicodeError, PDXError) as exc:
-            raise SaveError(f"Cannot read textual direct dump {self.path.name}: {exc}") from exc
-        state = normalize_gamestate(root, self.path, country_id=self.country_id)
-        state["direct_bridge"] = _bridge_receipts(root, state["country_id"])
-        observation = Observation(state, hashlib.sha256(data).hexdigest(), modified_at)
+        digest = hashlib.sha256(data).hexdigest()
+        key = (digest, self.country_id, str(self.path.resolve()))
+        with _CACHE_LOCK:
+            shared = _STATE_CACHE.get(key)
+            if shared is not None:
+                _STATS["state_cache_hit"] += 1
+                state = copy.deepcopy(shared)
+        if shared is None:
+            try:
+                root = parse_full(data, digest)
+            except (UnicodeError, PDXError) as exc:
+                raise SaveError(f"Cannot read textual direct dump {self.path.name}: {exc}") from exc
+            with without_cyclic_gc():
+                state = normalize_gamestate(root, self.path, country_id=self.country_id)
+                state["direct_bridge"] = _bridge_receipts(root, state["country_id"])
+            with _CACHE_LOCK:
+                _STATE_CACHE.clear()
+                _STATE_CACHE[key] = copy.deepcopy(state)
+        observation = Observation(state, digest, modified_at)
         self._cached_signature = signature
         self._cached = Observation(copy.deepcopy(state), observation.digest, observation.modified_at)
         return observation
+
+    def read_identity(self) -> Observation:
+        """Targeted read of only what connection validation inspects.
+
+        Uses the same stable byte copy, digest and modification time as
+        :meth:`read`; the state holds ``date``, ``country_id``, the identity
+        metadata and ``direct_bridge`` receipts, identical to a full read of the
+        same bytes. Callers needing planets, fleets or economy use ``read``.
+        """
+        data, _, modified_at = self._copy_snapshot()
+        if self.country_id is None:
+            raise ValueError("A targeted identity read requires an explicit country_id")
+        digest = hashlib.sha256(data).hexdigest()
+        try:
+            root = loads_selected(data.decode("utf-8-sig"), identity_spec(self.country_id))
+        except (UnicodeError, PDXError) as exc:
+            raise SaveError(f"Cannot read textual direct dump {self.path.name}: {exc}") from exc
+        state = normalize_identity(root, self.path, country_id=self.country_id)
+        state["direct_bridge"] = _bridge_receipts(root, state["country_id"])
+        count("targeted_parse")
+        return Observation(state, digest, modified_at)

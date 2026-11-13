@@ -119,6 +119,9 @@ def make_runtime(tmp_path, *, event_namespace="qs_direct_targets", with_connecti
     state_dir.mkdir()
     process, native = Process(), Native()
     runtime = AttachedRuntime(process, native, user_dir, state_dir, TOKEN)
+    # Tests stub _fresh; the targeted identity read takes its observations
+    # from the same stub so both connect reads consume one sequence.
+    runtime._fresh_identity = lambda: runtime._fresh()
     config = DirectConfig(
         user_dir=user_dir, state_dir=state_dir, country_id="0", campaign_id="campaign-a",
         verified_game_version="Cygnus v4.5.2", session_token=TOKEN,

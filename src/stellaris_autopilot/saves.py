@@ -810,15 +810,8 @@ def read_save(path: Path, *, country_id: str | None = None, max_bytes: int = 128
     return normalize_gamestate(root, path, country_id=country_id)
 
 
-def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = None) -> dict[str, Any]:
-    """Normalize an already parsed snapshot without reopening its source file.
-
-    Direct bridge dumps are overwritten while the game runs. Keeping this step
-    independent of file I/O lets callers parse one immutable, stable byte copy.
-    """
-    from .ship_commands import observe_shipyards
-    from .fleet_observe import observe_space
-    path = Path(path)
+def _identify(root: PDXNode, country_id: str | None) -> tuple[dict[str, PDXNode], set[str], str]:
+    """Resolve the country map, human player IDs and selected country exactly once."""
     countries = dict(_objects(root.get('country')))
     if not countries:
         raise SaveError('No country map found; this save format is unsupported')
@@ -832,6 +825,73 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
     country_id = str(country_id)
     if country_id not in countries:
         raise SaveError(f'Country {country_id!r} is absent from the save')
+    return countries, candidates, country_id
+
+
+def _snapshot_date(root: PDXNode) -> str:
+    date = root.get('date')
+    if date is None:
+        raise SaveError('Save has no date; cannot establish a state snapshot')
+    return str(date)
+
+
+def _identity_metadata(root: PDXNode, candidates: set[str]) -> dict[str, Any]:
+    """Build, campaign, player and mode fields shared by full and targeted reads."""
+    galaxy = _node(root.get('galaxy'))
+    return {
+        'game_version': _plain(root.get('version', root.get('savegame_version', 'unknown'))),
+        'campaign_id': (str(galaxy.get('name')).strip() or None) if isinstance(galaxy.get('name'), str) else None,
+        'player_country_ids': sorted(candidates),
+        'ironman': root.get('ironman', root.get('ironman_mode', galaxy.get('ironman', 'unknown'))),
+        'multiplayer': 'yes' if len(candidates) > 1 else root.get('multiplayer', 'unknown'),
+    }
+
+
+# Every root path the identity helpers above read; loads_selected keeps all
+# root scalars and the key/order of every root and country-map object.
+IDENTITY_SPEC: dict = {
+    'version': True, 'savegame_version': True, 'date': True, 'player': True,
+    'ironman': True, 'ironman_mode': True, 'multiplayer': True,
+    'galaxy': {'name': True, 'ironman': True},
+}
+
+
+def identity_spec(country_id: str) -> dict:
+    """Selection for identity plus the selected country's flag block and name."""
+    return {**IDENTITY_SPEC, 'country': {str(country_id): {'flags': True, 'name': True}}}
+
+
+def normalize_identity(root: PDXNode, path: Path, *, country_id: str) -> dict[str, Any]:
+    """Targeted counterpart of normalize_gamestate for connection validation only.
+
+    The result has the same ``date``, ``country_id`` and identity metadata as a
+    full normalization of the same snapshot, raises the same errors for those
+    fields, and omits all economy, planet and fleet state.
+    """
+    countries, candidates, country_id = _identify(root, country_id)
+    date = _snapshot_date(root)
+    return {
+        'date': date,
+        'country_id': country_id,
+        'metadata': {
+            'source': str(Path(path).resolve()),
+            'format': 'stellaris-text',
+            **_identity_metadata(root, candidates),
+            'extraction': 'targeted_identity',
+        },
+    }
+
+
+def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = None) -> dict[str, Any]:
+    """Normalize an already parsed snapshot without reopening its source file.
+
+    Direct bridge dumps are overwritten while the game runs. Keeping this step
+    independent of file I/O lets callers parse one immutable, stable byte copy.
+    """
+    from .ship_commands import observe_shipyards
+    from .fleet_observe import observe_space
+    path = Path(path)
+    countries, candidates, country_id = _identify(root, country_id)
     country = countries[country_id]
     unique_country = _single_node(_single_node(root, 'country'), country_id)
     resources, resource_path = _resources(country)
@@ -853,11 +913,10 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
         missing.append('planets')
     if not war_known:
         missing.append('at_war')
-    date = root.get('date')
-    if date is None:
-        raise SaveError('Save has no date; cannot establish a state snapshot')
+    date = _snapshot_date(root)
+    identity = _identity_metadata(root, candidates)
     return {
-        'date': str(date),
+        'date': date,
         'country_id': country_id,
         'name': str(_plain(country.get('name', ''))),
         'resources': resources,
@@ -875,14 +934,13 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
         'metadata': {
             'source': str(path.resolve()),
             'format': 'stellaris-text',
-            'game_version': _plain(root.get('version', root.get('savegame_version', 'unknown'))),
-            'campaign_id': (str(_node(root.get('galaxy')).get('name')).strip() or None)
-            if isinstance(_node(root.get('galaxy')).get('name'), str) else None,
-            'player_country_ids': sorted(candidates),
+            'game_version': identity['game_version'],
+            'campaign_id': identity['campaign_id'],
+            'player_country_ids': identity['player_country_ids'],
             'resource_path': resource_path,
             'war_status_known': war_known,
-            'ironman': root.get('ironman', root.get('ironman_mode', _node(root.get('galaxy')).get('ironman', 'unknown'))),
-            'multiplayer': 'yes' if len(candidates) > 1 else root.get('multiplayer', 'unknown'),
+            'ironman': identity['ironman'],
+            'multiplayer': identity['multiplayer'],
             'missing_fields': missing,
             'schema_notice': 'Field layouts vary by Stellaris version; empty values are unknown, not zero.',
             **_budget(country),

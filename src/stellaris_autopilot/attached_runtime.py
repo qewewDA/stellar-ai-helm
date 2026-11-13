@@ -15,7 +15,7 @@ from .connection_diagnostics import ConnectionPreflightError, check_connection_p
 from .direct import (NATIVE_ACTIONS, ORDER_KINDS, OWNERSHIP_HEADER, DirectConfig,
                      disarm_inbox, load_direct_config, ownership_header)
 from .direct_mcp import DirectConnection, _controller_lock, validate_connection
-from .direct_observe import DirectObserver
+from .direct_observe import DirectObserver, clear_observation_caches
 from .direct_orders import render_target_events
 from .mcp_server import _PreviewJournal
 from .native import NativeResearchBridge
@@ -91,25 +91,62 @@ class AttachedRuntime:
         raise CampaignError("Attached game operation timed out; do not replay it")
 
     def _fresh(self):
+        """Request a dump and return a full observation of the first fresh, stable generation."""
+        return self._await_dump(targeted=False)
+
+    def _fresh_identity(self):
+        """Like _fresh, but extract only the fields connection validation inspects."""
+        return self._await_dump(targeted=True)
+
+    def _await_dump(self, *, targeted: bool):
         token, started = uuid.uuid4().hex, time.time()
         self.native.request_dump(token)
         result = self._wait(token, "request_observation", "dump_requested")
-        deadline = self._until(120)
-        observer = DirectObserver(self.user_dir / "save games" / "dump_qs_direct.sav.txt", "0")
+        window = time.monotonic() + 120
+        deadline = min(window, self._deadline) if self._deadline is not None else window
+        path = self.user_dir / "save games" / "dump_qs_direct.sav.txt"
+        observer = DirectObserver(path, "0")
+        # Only stat() until the game has written a generation newer than the
+        # request and that generation's size and mtime held for two polls.
+        # A stale or still-growing dump is never parsed, and one generation is
+        # never parsed twice.
+        previous = None
+        attempted: set[tuple] = set()
+        fresh_seen = False
+        last_error = None
         while time.monotonic() < deadline:
             check_cancelled(self._cancel_event, "read_current_save")
             if self.process.poll() is not None:
                 raise CampaignError("The attached game exited")
             try:
-                observed = observer.read()
-            except ValueError:
-                pass
-            else:
-                check_cancelled(self._cancel_event, "read_current_save")
-                if observed.modified_at >= started:
-                    return observed, result
+                info = path.stat()
+            except OSError:
+                info = None
+            signature = None if info is None else (info.st_size, info.st_mtime_ns)
+            if info is not None and info.st_mtime >= started:
+                fresh_seen = True
+                if signature == previous and signature not in attempted:
+                    attempted.add(signature)
+                    try:
+                        observed = observer.read_identity() if targeted else observer.read()
+                    except ValueError as exc:
+                        last_error = exc
+                    else:
+                        check_cancelled(self._cancel_event, "read_current_save")
+                        if observed.modified_at >= started:
+                            return observed, result
+            previous = signature
             time.sleep(0.2)
-        raise CampaignError("No fresh matching dump in the selected user directory")
+        budget = ("the connection time budget (--connect-timeout) was exhausted"
+                  if self._deadline is not None and self._deadline <= window
+                  else "the 120-second dump window elapsed")
+        if not fresh_seen:
+            detail = "the game wrote no new dump after the request before " + budget
+        elif last_error is not None:
+            detail = f"a new dump was written but could not be read ({last_error}) before {budget}"
+        else:
+            detail = "a new dump was written but never stayed unchanged long enough to read before " + budget
+        raise CampaignError("No fresh matching dump in the selected user directory: " + detail)
 
     def _write_inbox(self, config: DirectConfig, text: str):
         _atomic(config.inbox_path, (ownership_header(config) + text).encode("utf-8"))
@@ -132,7 +169,9 @@ class AttachedRuntime:
                  "game_dump_requested": False, "gameplay_commands_sent": 0},
                 "Pause the intended loaded save. After the user confirms it is paused, call connect_game(retry=true) once.")
         self._phase("read_current_save")
-        observed, receipt = self._fresh()
+        # Identity gates need only a targeted extraction; the backup below
+        # still fully parses and verifies these exact bytes.
+        observed, receipt = self._fresh_identity()
         meta = observed.state.get("metadata", {})
         game_version = getattr(self.native, "game_version", "Cygnus v4.5.2")
         observation_only = getattr(self.native, "observation_only", False) is True
@@ -275,6 +314,8 @@ class AttachedRuntime:
                 if path.is_file() and path.read_bytes() == content:
                     path.unlink()
         finally:
+            # Cached trees can be hundreds of megabytes; release them with the session.
+            clear_observation_caches()
             try:
                 self.native.close()
             finally:

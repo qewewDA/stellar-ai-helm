@@ -26,7 +26,7 @@ class ExistingGameSession:
 
     def __init__(self, game_dir: Path, state_root: Path, *, user_dir: Path | None = None,
                  pid: int | None = None, extended: bool = False, knowledge_bundle: Path | None = None,
-                 timeout_seconds: float = 45):
+                 timeout_seconds: float = 120):
         if type(timeout_seconds) not in (int, float) or not 5 <= timeout_seconds <= 120:
             raise ValueError("Connection timeout must be between 5 and 120 seconds")
         self.game_dir, self.state_root = Path(game_dir), Path(state_root)

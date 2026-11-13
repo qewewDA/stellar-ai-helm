@@ -21,10 +21,10 @@ import time
 import uuid
 import zipfile
 
-from .direct_observe import DirectObserver
+from .direct_observe import DirectObserver, cached_state, parse_full
 from .engine import game_date
 from .observe import Observation
-from .pdx import PDXNode, loads
+from .pdx import PDXNode, without_cyclic_gc
 from .saves import SaveError, normalize_gamestate
 
 
@@ -82,9 +82,12 @@ def _single(node: PDXNode, key: str):
     return values[0]
 
 
-def _decode(data: bytes, path: Path, country_id: str) -> tuple[PDXNode, dict]:
+def _decode(data: bytes, path: Path, country_id: str, *, reuse_observation: bool = False) -> tuple[PDXNode, dict]:
     try:
-        root = loads(data.decode("utf-8-sig"))
+        # Exact bytes already fully parsed by a verified observation (same
+        # SHA-256) reuse that tree instead of parsing the galaxy again.
+        digest = hashlib.sha256(data).hexdigest()
+        root = parse_full(data, digest)
         for key in ("version", "date", "galaxy", "country"):
             _single(root, key)
         galaxy = _single(root, "galaxy")
@@ -96,7 +99,14 @@ def _decode(data: bytes, path: Path, country_id: str) -> tuple[PDXNode, dict]:
             raise CampaignError("Campaign identity is unknown")
         if not isinstance(_single(countries, country_id), PDXNode):
             raise CampaignError("Selected country is absent or malformed")
-        state = normalize_gamestate(root, path, country_id=country_id)
+        # A direct observation of these same bytes and path already ran this
+        # exact normalization; its copy (minus bridge receipts) is identical.
+        state = cached_state(digest, country_id, path) if reuse_observation else None
+        if state is not None:
+            state.pop("direct_bridge", None)
+        else:
+            with without_cyclic_gc():
+                state = normalize_gamestate(root, path, country_id=country_id)
         game_date(state["date"])
         metadata = state["metadata"]
         if metadata["player_country_ids"] != [country_id]:
@@ -280,7 +290,7 @@ def package_dump(dump_path: Path, destination: Path, country_id: str, *, expecte
     digest = hashlib.sha256(data).hexdigest()
     if expected_digest is not None and digest != expected_digest:
         raise CampaignError("The dump changed after the verified observation")
-    root, state = _decode(data, dump_path, country_id)
+    root, state = _decode(data, dump_path, country_id, reuse_observation=True)
     browser = _browser_metadata(root, country_id)
     if destination.exists():
         raise CampaignError("A checkpoint destination may never be overwritten")

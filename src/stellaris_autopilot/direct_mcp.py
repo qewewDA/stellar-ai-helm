@@ -197,6 +197,12 @@ class DirectConnection:
                     if (config.state_dir / "STOP").exists():
                         return {"status": "stopped", "reason": "STOP file exists"}
                     try:
+                        # A dump older than the request can never be returned;
+                        # skip copying and parsing it until the game rewrites it.
+                        stale = getattr(observer, "is_stale", None)
+                        if stale is not None and stale(published_at):
+                            time.sleep(config.poll_seconds)
+                            continue
                         observation = self._read(observer)
                         if observation.modified_at >= published_at:
                             validate_connection(config, observation)

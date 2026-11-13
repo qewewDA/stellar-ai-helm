@@ -21,7 +21,7 @@ def main():
     parser.add_argument("--pid", type=int, help="Optional local PID selection when multiple games exist")
     parser.add_argument("--extended", action="store_true")
     parser.add_argument("--knowledge-bundle", type=Path)
-    parser.add_argument("--connect-timeout", type=float, default=45,
+    parser.add_argument("--connect-timeout", type=float, default=120,
                         help="Initialization budget in seconds; file work and cleanup can take extra time")
     args = parser.parse_args()
     session = ExistingGameSession(args.game_dir, args.state_dir, user_dir=args.user_dir,

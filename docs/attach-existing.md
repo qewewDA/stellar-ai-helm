@@ -38,7 +38,7 @@ uv run python scripts/serve_existing_game.py `
 - `--user-dir` 可选：不填时从 `game-dir\userdir.txt` 或默认 Documents 目录解析；必须与游戏当前实际使用的用户目录一致。
 - `--pid` 可选：本机有多个 `stellaris.exe` 时明确选择；模型不能填写或猜测。
 - `--extended` 与直连模式相同；`--knowledge-bundle` 可选。
-- `--connect-timeout` 可选，默认 45 秒（范围 5–120 秒），是 `connect_game()` 的初始化预算，不是严格的墙钟取消期限。进程检查和原生 RPC 等待会按剩余预算收紧；文件解析、同步清理等本地步骤仍可能额外耗时，因此不承诺到点强制中断。MCP 握手和工具暴露不等待游戏。
+- `--connect-timeout` 可选，默认 120 秒（范围 5–120 秒），是 `connect_game()` 的初始化预算，不是严格的墙钟取消期限。进程检查和原生 RPC 等待会按剩余预算收紧；文件解析、同步清理等本地步骤仍可能额外耗时，因此不承诺到点强制中断。MCP 握手和工具暴露不等待游戏。
 
 MCP 客户端配置示例（路径按本机替换，`cwd` 指向仓库根目录）：
 
