@@ -284,7 +284,7 @@ def test_checkpoint_pause_failure_reports_the_pause_reason(tmp_path, monkeypatch
     with pytest.raises(CampaignError, match="Cannot verify pause before saving: Protected modal pause") as error:
         env.runtime.checkpoint_game()
     assert packages == []
-    assert "advance time at least one day" in str(error.value)
+    assert "do not replay" in str(error.value) and "same" not in str(error.value)
 
 
 def test_checkpoint_rejects_an_unpaused_native_receipt(tmp_path, monkeypatch):

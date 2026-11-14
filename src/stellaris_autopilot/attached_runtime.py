@@ -43,10 +43,11 @@ def resolve_user_dir(game_dir: Path, explicit: Path | None = None) -> Path:
     return result
 
 
-# Live 2026-11-14 (4.5.2): right after a state-changing command the game only
-# writes the pause-confirmation marker once time has run at least one day.
-_SAME_DAY_HINT = (". If a state-changing command was verified earlier on this game day, advance time at "
-                  "least one day, pause, then retry checkpoint_game once")
+# Live 2026-11-14 (4.5.2): the pause-confirmation dump can miss even when the
+# game thread reports paused (seen after a decision on the same day and after a
+# manual pause). The cause is not known, so the hint names no cause.
+_PAUSE_FAILURE_HINT = (". The game may still be paused; the pause op stays unverified. Inspect it before "
+                  "reconciling; do not replay or retry in a loop")
 
 class AttachedRuntime:
     def __init__(self, process, native, user_dir: Path, state_dir: Path, token: str, *, extended=False,
@@ -284,7 +285,7 @@ class AttachedRuntime:
                 reason = paused.get("reason")
                 raise CampaignError("Cannot verify pause before saving"
                                     + (": " + reason if isinstance(reason, str) and reason else "")
-                                    + _SAME_DAY_HINT)
+                                    + _PAUSE_FAILURE_HINT)
             config = load_direct_config(self.config_path)
             with _controller_lock(config):
                 if _PreviewJournal(self.state_dir / "journal.sqlite").unresolved():
