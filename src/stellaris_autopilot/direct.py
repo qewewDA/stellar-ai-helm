@@ -344,12 +344,18 @@ def publish_pause_verification(config: DirectConfig, paused: bool, token: str) -
     _token(token, "operation token")
     if type(paused) is not bool or "set_paused" not in config.allowed_native_actions:
         raise ValueError("Pause verification requires a boolean and local authorization")
+    # The console effect runs in the selected object's scope. Live 2026-11-14:
+    # with a planet selected every country trigger failed ("Wrong scope ...
+    # Current Scope: planet"), so no receipt was written. Enter our own
+    # country explicitly; the session flag matches only that country.
+    session = f"qs_direct_session_{config.session_token}"
     body = (
         ownership_header(config)
-        + "effect if = { limit = { is_ai = no is_ironman = no is_multiplayer = no "
-        + f"has_country_flag = qs_direct_session_{config.session_token} "
+        + f"effect every_playable_country = {{ limit = {{ has_country_flag = {session} }} "
+        + "if = { limit = { is_ai = no is_ironman = no is_multiplayer = no "
+        + f"has_country_flag = {session} "
         + f"is_paused = {'yes' if paused else 'no'} NOT = {{ has_country_flag = qs_direct_done_{token} }} "
-        + f'}} set_country_flag = qs_direct_done_{token} log = "SAA_DIRECT|pause_postcondition|token={token}" }}\n'
+        + f'}} set_country_flag = qs_direct_done_{token} log = "SAA_DIRECT|pause_postcondition|token={token}" }} }}\n'
         + "debug_dumpgamestate qs_direct\n"
     )
     return _publish(config, body, honor_stop=True)

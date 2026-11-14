@@ -97,8 +97,12 @@ def test_publisher_checks_pause_trigger_and_writes_one_guarded_receipt_without_s
     assert command.startswith("effect ")
     assert dump == "debug_dumpgamestate qs_direct"
     root = loads(command.removeprefix("effect "))
-    assert [key for key, _ in root.items()] == ["if"]
-    body = root.get("if")
+    # Scope-independent: the console may run in a selected planet's scope.
+    assert [key for key, _ in root.items()] == ["every_playable_country"]
+    country = root.get("every_playable_country")
+    assert [key for key, _ in country.items()] == ["limit", "if"]
+    assert country.get("limit").get("has_country_flag") == f"qs_direct_session_{SESSION}"
+    body = country.get("if")
     limit = body.get("limit")
     assert limit.get("is_paused") == expected
     assert limit.get("has_country_flag") == f"qs_direct_session_{SESSION}"
