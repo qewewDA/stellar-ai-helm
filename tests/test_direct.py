@@ -116,8 +116,10 @@ def test_probe_has_only_selected_session_receipt_and_fixed_dump(config):
     assert f"session={SESSION} country=0" in header
     assert dump == "debug_dumpgamestate qs_direct"
     root = loads(effect.removeprefix("effect "))
-    assert list(key for key, _ in root.items()) == ["if"]
-    body = root.get("if")
+    assert list(key for key, _ in root.items()) == ["every_playable_country"]
+    country = root.get("every_playable_country")
+    assert country.get("limit").get("has_country_flag") == f"qs_direct_session_{SESSION}"
+    body = country.get("if")
     limit = body.get("limit")
     assert limit.get("is_ai") == "no"
     assert limit.get("is_ironman") == "no"
@@ -138,7 +140,7 @@ def test_hold_action_requires_separate_authorization_and_renders_only_normal_wai
     assert list(config.user_dir.iterdir()) == []
     authorized = replace(config, allowed_actions=("hold_military_fleets",))
     script = render_action(authorized, "hold_military_fleets", TOKEN)
-    body = loads(script.splitlines()[1].removeprefix("effect ")).get("if")
+    body = loads(script.splitlines()[1].removeprefix("effect ")).get("every_playable_country").get("if")
     assert body.get("limit").get("has_country_flag") == f"qs_direct_session_{SESSION}"
     assert body.get("limit").get("NOT").get("has_country_flag") == f"qs_direct_done_{TOKEN}"
     fleets = body.get("every_owned_fleet")
@@ -327,7 +329,7 @@ def test_test_event_action_requires_authorization_and_renders_only_the_fixed_eve
         atomic_publish(config, TOKEN, action_id=TEST_EVENT_ACTION)
     authorized = replace(config, allowed_actions=(TEST_EVENT_ACTION,))
     script = render_action(authorized, TEST_EVENT_ACTION, TOKEN)
-    body = loads(script.splitlines()[1].removeprefix("effect ")).get("if")
+    body = loads(script.splitlines()[1].removeprefix("effect ")).get("every_playable_country").get("if")
     assert body.get("limit").get("is_ai") == "no"
     assert body.get("limit").get("has_country_flag") == f"qs_direct_session_{SESSION}"
     assert dict(body.get("country_event").items()) == {"id": TEST_EVENT_ID}
@@ -341,7 +343,7 @@ def test_test_contact_action_requires_authorization_and_renders_only_the_fixed_e
         atomic_publish(config, TOKEN, action_id=TEST_CONTACT_ACTION)
     authorized = replace(config, allowed_actions=(TEST_CONTACT_ACTION,))
     script = render_action(authorized, TEST_CONTACT_ACTION, TOKEN)
-    body = loads(script.splitlines()[1].removeprefix("effect ")).get("if")
+    body = loads(script.splitlines()[1].removeprefix("effect ")).get("every_playable_country").get("if")
     assert body.get("limit").get("is_ai") == "no"
     chosen = body.get("random_playable_country")
     assert dict(chosen.get("limit").items()) == {"is_country_type": "default", "is_ai": "yes",

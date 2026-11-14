@@ -12,7 +12,7 @@ import math
 import re
 from typing import Any
 
-from .direct import ORDER_KINDS, DirectConfig, _confirm_mode, _token, ownership_header, validate_direct_config
+from .direct import ORDER_KINDS, DirectConfig, country_scoped, _confirm_mode, _token, ownership_header, validate_direct_config
 
 
 _ID = re.compile(r"(?:0|[1-9][0-9]{0,9})", re.ASCII)
@@ -212,12 +212,13 @@ def render_order(config: DirectConfig, order: Order, token: str) -> str:
         execution += f" queue_actions = {{ {queue} }}"
     return (
         ownership_header(config) + cleanup + binding
-        + "effect if = { limit = { is_ai = no is_multiplayer = no is_ironman = no "
-        + f"has_country_flag = qs_direct_session_{session} has_country_flag = qs_direct_targets_{session} "
-        + f"NOT = {{ has_country_flag = qs_direct_done_{token} }} exists = event_target:{fleet} "
-        + target_guard + fleet_guard + "} "
-        + f"event_target:{fleet} = {{ {execution} }} "
-        + f'set_country_flag = qs_direct_done_{token} log = "SAA_DIRECT|{order.kind}|token={token}" }}\n'
+        + "effect " + country_scoped(session, (
+            "if = { limit = { is_ai = no is_multiplayer = no is_ironman = no "
+            + f"has_country_flag = qs_direct_session_{session} has_country_flag = qs_direct_targets_{session} "
+            + f"NOT = {{ has_country_flag = qs_direct_done_{token} }} exists = event_target:{fleet} "
+            + target_guard + fleet_guard + "} "
+            + f"event_target:{fleet} = {{ {execution} }} "
+            + f'set_country_flag = qs_direct_done_{token} log = "SAA_DIRECT|{order.kind}|token={token}" }}')) + "\n"
         + cleanup + "debug_dumpgamestate qs_direct\n"
     )
 

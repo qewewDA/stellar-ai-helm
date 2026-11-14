@@ -216,6 +216,18 @@ def load_direct_config(path: str | Path) -> DirectConfig:
     return config
 
 
+def country_scoped(session_token: str, branch: str) -> str:
+    """Run one ``if = {...}`` branch in our own country scope.
+
+    The console effect runs in the selected object's scope. Live 2026-11-14:
+    with a planet selected every country trigger failed ("Wrong scope ...
+    Current Scope: planet") and no receipt was written. The session flag
+    matches only our country.
+    """
+    return (f"every_playable_country = {{ limit = {{ has_country_flag = qs_direct_session_{session_token} }} "
+            + branch + " }")
+
+
 def ownership_header(config: DirectConfig) -> str:
     """Bind project ownership to the locally selected country and session."""
     validate_direct_config(config)
@@ -247,11 +259,12 @@ def render_action(config: DirectConfig, action_id: str, token: str) -> str:
                   "NOT = { has_communications = prev } } establish_communications_no_message = prev } ")
     return (
         ownership_header(config)
-        + "effect if = { limit = { is_ai = no is_ironman = no is_multiplayer = no "
-        + f"has_country_flag = {session} NOT = {{ has_country_flag = {done} }} "
-        + "} " + orders
-        + f'set_country_flag = {done} log = "SAA_DIRECT|{action_id}|'
-        + f'session={config.session_token}|token={token}" }}\n'
+        + "effect " + country_scoped(config.session_token, (
+            "if = { limit = { is_ai = no is_ironman = no is_multiplayer = no "
+            + f"has_country_flag = {session} NOT = {{ has_country_flag = {done} }} "
+            + "} " + orders
+            + f'set_country_flag = {done} log = "SAA_DIRECT|{action_id}|'
+            + f'session={config.session_token}|token={token}" }}')) + "\n"
         + "debug_dumpgamestate qs_direct\n"
     )
 
@@ -344,18 +357,14 @@ def publish_pause_verification(config: DirectConfig, paused: bool, token: str) -
     _token(token, "operation token")
     if type(paused) is not bool or "set_paused" not in config.allowed_native_actions:
         raise ValueError("Pause verification requires a boolean and local authorization")
-    # The console effect runs in the selected object's scope. Live 2026-11-14:
-    # with a planet selected every country trigger failed ("Wrong scope ...
-    # Current Scope: planet"), so no receipt was written. Enter our own
-    # country explicitly; the session flag matches only that country.
     session = f"qs_direct_session_{config.session_token}"
     body = (
         ownership_header(config)
-        + f"effect every_playable_country = {{ limit = {{ has_country_flag = {session} }} "
-        + "if = { limit = { is_ai = no is_ironman = no is_multiplayer = no "
-        + f"has_country_flag = {session} "
-        + f"is_paused = {'yes' if paused else 'no'} NOT = {{ has_country_flag = qs_direct_done_{token} }} "
-        + f'}} set_country_flag = qs_direct_done_{token} log = "SAA_DIRECT|pause_postcondition|token={token}" }} }}\n'
+        + "effect " + country_scoped(config.session_token, (
+            "if = { limit = { is_ai = no is_ironman = no is_multiplayer = no "
+            + f"has_country_flag = {session} "
+            + f"is_paused = {'yes' if paused else 'no'} NOT = {{ has_country_flag = qs_direct_done_{token} }} "
+            + f'}} set_country_flag = qs_direct_done_{token} log = "SAA_DIRECT|pause_postcondition|token={token}" }}')) + "\n"
         + "debug_dumpgamestate qs_direct\n"
     )
     return _publish(config, body, honor_stop=True)

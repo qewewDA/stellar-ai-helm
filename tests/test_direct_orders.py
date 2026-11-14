@@ -179,7 +179,7 @@ def test_order_script_uses_typed_ids_guards_and_receipt_only_inside_execution(co
         target = branch.get("clear_global_event_target")
         assert target in {f"qs_direct_fleet_{SESSION}", f"qs_direct_planet_{SESSION}"}
         assert branch.get("limit").get("exists") == f"event_target:{target}"
-    body = loads(next(line[7:] for line in commands if line.startswith("effect if = { limit = { is_ai"))).get("if")
+    body = loads(next(line[7:] for line in commands if line.startswith("effect every_playable_country"))).get("every_playable_country").get("if")
     guard = body.get("limit")
     assert guard.get_all("has_country_flag") == [f"qs_direct_session_{SESSION}", f"qs_direct_targets_{SESSION}"]
     assert guard.get("NOT").get("has_country_flag") == f"qs_direct_done_{TOKEN}"
@@ -377,7 +377,7 @@ def test_stop_clears_both_queues_with_session_guard_and_no_followup_wait(config)
     assert "queue_actions" not in script and "wait =" not in script
     assert "clear_fleet_actions = this clear_orders = yes" in script
     commands = script.splitlines()[1:]
-    body = loads(next(line[7:] for line in commands if line.startswith("effect if = { limit = { is_ai"))).get("if")
+    body = loads(next(line[7:] for line in commands if line.startswith("effect every_playable_country"))).get("every_playable_country").get("if")
     guard = body.get("limit")
     assert guard.get_all("has_country_flag") == [f"qs_direct_session_{SESSION}", f"qs_direct_targets_{SESSION}"]
     assert guard.get("NOT").get("has_country_flag") == f"qs_direct_done_{TOKEN}"
