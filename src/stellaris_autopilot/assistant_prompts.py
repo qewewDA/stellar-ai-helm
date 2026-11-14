@@ -163,7 +163,7 @@ def render_prompt(*, playstyle: str = "", campaign: bool = True, existing_game: 
         "harm_relations / improve_relations 派一名空闲特使执行损害/改善关系任务（损害关系后可侮辱、宣布宿敌）。"
         "propose_diplomacy 提交需对方同意的提议（embassy、non_aggression_pact、research_agreement、"
         "commercial_pact、migration_pact）：验证结果为 accepted 或 pending；pending 由对方 AI 之后决定，"
-        "用 list_diplomacy 的 our_proposals / pacts 观察结果，被拒绝不自动重提。"
+        "用 list_diplomacy 的 our_proposals / pacts / recent_proposals（pending、accepted、declined_or_expired）观察结果，被拒绝不自动重提。"
         "以上动作都可作为 execute_plan 的步骤（kind 加同名工具参数），一次最多 20 步，串行验证。",
         "【执行与汇报】\n"
         "每条命令核对真实后置条件，分别说明入队、订单验证、自然完成和殖民落地。"

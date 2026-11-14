@@ -322,3 +322,31 @@ def test_proposal_verification_reports_accepted_or_pending_only():
     close = resolve_diplomacy_command(before, diplomacy_request("close_borders", target_country_id="16777222"))
     assert verify_diplomacy_command(before, _envoy_state(ours="closed_borders=yes", incoming=_pending()),
                                     close) is False
+
+
+def _with_last_actions(text, actions):
+    entries = " ".join('{ country=%s action="%s" creation_date="%s" }' % entry for entry in actions)
+    marker = '    name="Us"\n'
+    assert marker in text
+    return text.replace(marker, marker + "    ai={ last_diplo_actions={ %s } }\n" % entries, 1)
+
+
+def _recent(ours="", incoming="", actions=()):
+    text = ENVOY_SAVE.replace("ENVOY_A", "").replace("ENVOY_B", "").replace("OURS", ours)
+    text = text.replace("THEIRS trust=0 } } }", "trust=0 } } " + incoming + " }")
+    state = _state(_with_last_actions(text, actions), date="2209.09.01")
+    return state["diplomacy"]["by_country"]["16777222"]["recent_proposals"]
+
+
+def test_recent_proposals_report_pending_accepted_and_declined_from_last_diplo_actions():
+    embassy = [("16777222", "action_embassy", "2209.01.01"), ("16777222", "action_embassy", "2209.02.05")]
+    assert _recent(incoming=_pending(), actions=embassy) == [
+        {"action": "action_embassy", "proposed_on": "2209.02.05", "status": "pending"}]
+    assert _recent(ours="embassy=yes", actions=embassy)[0]["status"] == "accepted"
+    nap = ("16777222", "action_form_non_aggression_pact", "2209.03.01")
+    assert _recent(actions=embassy + [nap, ("16777222", "action_insult", "2209.03.02"),
+                                      ("73", "action_embassy", "2209.03.03")]) == [
+        {"action": "action_embassy", "proposed_on": "2209.02.05", "status": "declined_or_expired"},
+        {"action": "action_form_non_aggression_pact", "proposed_on": "2209.03.01",
+         "status": "declined_or_expired"}]
+    assert _recent() == []

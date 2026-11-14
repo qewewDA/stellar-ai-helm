@@ -177,6 +177,54 @@ def _our_proposals(country: PDXNode, us: str) -> list | None:
     return sorted(found, key=lambda entry: (entry["action"], str(entry["id"])))
 
 
+_PROPOSAL_FLAGS = {action: flag for action, flag in PROPOSALS.values()}
+
+
+def _last_proposals(own: PDXNode) -> dict | None:
+    """Our latest proposal of each kind per target from ``ai.last_diplo_actions``.
+
+    The game writes no rejection notice into the save (live 2210.06.22 dump);
+    this is the only record that a proposal was made once it has left the
+    recipient's ``incoming_actions``. None when unreadable.
+    """
+    found: dict = {}
+    ais = own.get_all("ai")
+    if not ais:
+        return found
+    if len(ais) != 1 or not isinstance(ais[0], PDXNode):
+        return None
+    blocks = ais[0].get_all("last_diplo_actions")
+    if not blocks:
+        return found
+    if len(blocks) != 1 or not isinstance(blocks[0], PDXNode):
+        return None
+    for item in blocks[0].values():
+        if not isinstance(item, PDXNode):
+            return None
+        action, target, date = _scalar(item, "action"), _scalar(item, "country"), _scalar(item, "creation_date")
+        if action not in _PROPOSAL_FLAGS or target is None:
+            continue
+        previous = found.setdefault(target, {}).get(action)
+        if previous is None or (date or "") > (previous or ""):
+            found[target][action] = date
+    return found
+
+
+def _recent_proposals(last: dict | None, target: str, pacts: dict, pending: list | None) -> list | None:
+    """Status of our latest proposals to one country: pending, accepted or declined_or_expired."""
+    if last is None or pending is None:
+        return None
+    entries = []
+    for action, date in sorted(last.get(target, {}).items()):
+        flag = _PROPOSAL_FLAGS[action]
+        status = ("pending" if any(entry["action"] == action for entry in pending)
+                  else "accepted" if pacts.get(flag) is True
+                  else "unknown" if pacts.get(flag) is None
+                  else "declined_or_expired")
+        entries.append({"action": action, "proposed_on": date, "status": status})
+    return entries
+
+
 def observe_envoys(root: PDXNode, country_id: str = "0") -> dict:
     """Our envoys and their current assignment, keyed by leader id."""
     result = {"known": False, "by_id": {}}
@@ -216,6 +264,7 @@ def observe_diplomacy(root: PDXNode, country_id: str = "0") -> dict:
     if relations is None:
         return result
     found = {}
+    last = _last_proposals(own[0])
     for key, relation in relations.items():
         flags = {name: _flag(relation, name) for name in _FLAGS}
         if any(value is None for value in flags.values()):
@@ -226,6 +275,7 @@ def observe_diplomacy(root: PDXNode, country_id: str = "0") -> dict:
                      if len(others) == 1 and isinstance(others[0], PDXNode) else [])
         found[key] = {"country": key, "country_type": their.get("country_type"), **flags,
                       "pacts": _pacts(relation), "our_proposals": proposals,
+                      "recent_proposals": _recent_proposals(last, key, {**_pacts(relation), **flags}, proposals),
                       "relation": _canonical(relation),
                       "their_side": {name: value for name, value in their.items() if name != "country_type"}}
     result.update(known=True, by_country=found, envoys=observe_envoys(root, country_id))
