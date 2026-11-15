@@ -21,13 +21,16 @@ from .decision_commands import (DecisionRequest, ResolvedDecisionCommand, resolv
                                 verify_decision_command, native_decision_payload)
 from .species_rights_commands import (SpeciesRightRequest, ResolvedSpeciesRightCommand, resolve_species_right,
                                       verify_species_right, native_species_right_payload)
+from .starbase_commands import (StarbaseRequest, ResolvedStarbaseCommand, resolve_starbase_command,
+                                verify_starbase_command, native_starbase_payload)
 
 
 REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest, ControlRequest,
-                 EventRequest, DiplomacyRequest, DecisionRequest, SpeciesRightRequest)
+                 EventRequest, DiplomacyRequest, DecisionRequest, SpeciesRightRequest,
+                 StarbaseRequest)
 RESOLVED_TYPES = (ShipConstruction, ResolvedPlanetCommand, FleetOperation, ColonyShipConstruction,
                   ResolvedCountryCommand, ResolvedControlCommand, ResolvedEventCommand, ResolvedDiplomacyCommand,
-                  ResolvedDecisionCommand, ResolvedSpeciesRightCommand)
+                  ResolvedDecisionCommand, ResolvedSpeciesRightCommand, ResolvedStarbaseCommand)
 
 
 def resolve_extended(state, request):
@@ -51,6 +54,8 @@ def resolve_extended(state, request):
         return resolve_decision_command(state, request)
     if isinstance(request, SpeciesRightRequest):
         return resolve_species_right(state, request)
+    if isinstance(request, StarbaseRequest):
+        return resolve_starbase_command(state, request)
     raise ValueError("Unsupported extended native request")
 
 
@@ -75,6 +80,8 @@ def verify_extended(before, after, command):
         return verify_decision_command(before, after, command)
     if isinstance(command, ResolvedSpeciesRightCommand):
         return verify_species_right(before, after, command)
+    if isinstance(command, ResolvedStarbaseCommand):
+        return verify_starbase_command(before, after, command)
     return False
 
 
@@ -107,4 +114,6 @@ def extended_payload(command, token):
         return native_decision_payload(command, token)
     if isinstance(command, ResolvedSpeciesRightCommand):
         return native_species_right_payload(command, token)
+    if isinstance(command, ResolvedStarbaseCommand):
+        return native_starbase_payload(command, token)
     raise ValueError("Unsupported resolved native command")

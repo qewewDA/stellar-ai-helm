@@ -45,6 +45,7 @@ from .planet_commands import planet_request
 from .country_commands import country_request, definition_from_record, list_policies as policy_listing
 from .control_commands import control_request
 from .diplomacy_commands import PROPOSALS, ResolvedDiplomacyCommand, diplomacy_request, proposal_outcome
+from .starbase_commands import starbase_request
 from .species_rights_commands import CATEGORIES as SPECIES_RIGHT_CATEGORIES, category_of, species_right_request
 from .decision_commands import (ResolvedDecisionCommand, decision_definition, decision_outcome, decision_request,
                                 list_planet_decisions as planet_decision_listing)
@@ -379,6 +380,9 @@ class DirectConnection:
 
     def species_right_command(self, kind: str, definition=None, **payload) -> dict:
         return self._extended(species_right_request(kind, definition, **payload))
+
+    def starbase_command(self, kind: str, definition=None, **payload) -> dict:
+        return self._extended(starbase_request(kind, definition, **payload))
 
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
@@ -1242,6 +1246,35 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         return await call_write(connection.species_right_command, "set_species_right", True,
                                 species_id=species_id, right=right)
 
+    async def _queue_starbase(kind: str, category: str, starbase_id: str, slot: str, type_id: str) -> dict:
+        try:
+            found = knowledge().lookup(category, type_id, [])
+        except ValueError as error:
+            return {"status": "blocked", "reason": "Exact definition facts are required before submission: " + str(error)}
+        if not isinstance(found, dict) or found.get("status") != "found":
+            return {"status": "blocked", "reason": "The type was not found in versioned game knowledge"}
+        return await call_write(connection.starbase_command, kind, True, starbase_id=starbase_id, slot=slot,
+                                type_id=type_id)
+
+    @server.tool(annotations=writing)
+    async def queue_starbase_module(starbase_id: str, slot: str, module_id: str) -> dict:
+        """Queue one starbase module in one free slot of an owned starbase through the normal build queue.
+
+        Read free slots from observe_empire state.starbase_slots (built modules by
+        slot) and starbase ids from control_state.starbase_queues. The game's
+        validator checks slot limits, prerequisites and cost. Verified as one new
+        paid buildable_starbase_module item for exactly that module, slot and starbase.
+        """
+        return await _queue_starbase("queue_starbase_module", "starbase_modules", starbase_id, slot, module_id)
+
+    @server.tool(annotations=writing)
+    async def queue_starbase_building(starbase_id: str, slot: str, building_id: str) -> dict:
+        """Queue one starbase building in one free slot of an owned starbase through the normal build queue.
+
+        Same rules as queue_starbase_module, with state.starbase_slots buildings.
+        """
+        return await _queue_starbase("queue_starbase_building", "starbase_buildings", starbase_id, slot, building_id)
+
     @server.tool(annotations=readonly)
     async def list_diplomacy() -> dict:
         """List our side of every known relation: contact, communications, hostility and border state.
@@ -1402,6 +1435,8 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "deactivate_edict": "Cancel one active edict normally, verifying no refund",
                                     "enact_planet_decision": "Enact one planetary decision on an owned planet with normal checks",
                                     "set_species_right": "Change one category of our primary species' rights with normal checks",
+                                    "queue_starbase_module": "Queue one starbase module in a free slot with normal payment",
+                                    "queue_starbase_building": "Queue one starbase building in a free slot with normal payment",
                                     "set_fleet_stance": "Set one owned fleet's passive/aggressive/evasive stance normally",
                                     "move_queue_item": "Move one owned construction item one place up or down in its queue",
                                     "queue_defense_platform": "Queue one defense platform at an owned starbase with normal payment",

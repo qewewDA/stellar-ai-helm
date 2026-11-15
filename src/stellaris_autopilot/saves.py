@@ -13,6 +13,7 @@ from .event_commands import observe_pending_events
 from .diplomacy_commands import observe_diplomacy
 from .decision_commands import observe_planet_modifiers
 from .species_rights_commands import observe_species_rights
+from .starbase_commands import observe_starbase_slots
 
 
 class SaveError(ValueError):
@@ -921,6 +922,8 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
         missing.append('at_war')
     date = _snapshot_date(root)
     identity = _identity_metadata(root, candidates)
+    control_state = observe_control_state(root, country_id, fleets, fleets_known)
+    starbases = control_state['starbase_queues']
     return {
         'date': date,
         'country_id': country_id,
@@ -933,7 +936,9 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
         'construction': _construction(root, country_id, country_known=unique_country is not None),
         'shipbuilding': observe_shipyards(root, country_id, fleets) if fleets_known else {},
         'space': observe_space(root, country_id),
-        'control_state': observe_control_state(root, country_id, fleets, fleets_known),
+        'control_state': control_state,
+        'starbase_slots': (observe_starbase_slots(root, list(starbases['by_id'])) if starbases.get('known') is True
+                           else {'known': False, 'by_id': {}}),
         'pending_events': observe_pending_events(root),
         'diplomacy': observe_diplomacy(root, country_id) if country_id == '0' else {'known': False, 'by_country': {}},
         'planet_modifiers': observe_planet_modifiers(root, [planet['id'] for planet in planets]),
