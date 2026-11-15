@@ -14,6 +14,7 @@ from .diplomacy_commands import observe_diplomacy
 from .decision_commands import observe_planet_modifiers
 from .species_rights_commands import observe_species_rights
 from .starbase_commands import observe_starbase_slots
+from .army_commands import observe_army_queues
 
 
 class SaveError(ValueError):
@@ -390,7 +391,9 @@ def _construction(root: PDXNode, country_id: str, *, country_known: bool) -> dic
             if (_single(carrier, 'type') != 'planet'
                     or _identifier(_single(carrier, 'reference')) != location.get('id')
                     or _identifier(_single(planet, 'colony')) != colony_id
-                    or _identifier(_single(planet, 'build_queue')) != queue_id
+                    or (_identifier(_single(colony, 'army_build_queue')) != queue_id
+                        if own_queues[queue_id]['type'] == 'army'
+                        else _identifier(_single(planet, 'build_queue')) != queue_id)
                     or _identifier(_single(planet, 'owner')) != country_id):
                 item_issues.add('items.location_conflict')
                 continue
@@ -937,6 +940,7 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
         'shipbuilding': observe_shipyards(root, country_id, fleets) if fleets_known else {},
         'space': observe_space(root, country_id),
         'control_state': control_state,
+        'army_queues': observe_army_queues(root, country_id) if country_id == '0' else {'known': False, 'by_id': {}},
         'starbase_slots': (observe_starbase_slots(root, list(starbases['by_id'])) if starbases.get('known') is True
                            else {'known': False, 'by_id': {}}),
         'pending_events': observe_pending_events(root),

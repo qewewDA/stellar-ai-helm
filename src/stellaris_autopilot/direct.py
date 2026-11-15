@@ -69,7 +69,7 @@ NATIVE_ACTIONS = frozenset({"select_research", "queue_district", "queue_building
                             "harm_relations", "improve_relations", "propose_embassy", "propose_non_aggression_pact",
                             "propose_research_agreement", "propose_commercial_pact", "propose_migration_pact",
                             "enact_planet_decision", "set_species_right",
-                            "queue_starbase_module", "queue_starbase_building"})
+                            "queue_starbase_module", "queue_starbase_building", "recruit_army"})
 _TOKEN = re.compile(r"[0-9a-f]{32}", re.ASCII)
 _COUNTRY = re.compile(r"[0-9]{1,10}", re.ASCII)
 

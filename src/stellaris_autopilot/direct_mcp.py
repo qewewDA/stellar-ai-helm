@@ -47,6 +47,7 @@ from .country_commands import country_request, definition_from_record, list_poli
 from .control_commands import control_request
 from .diplomacy_commands import PROPOSALS, ResolvedDiplomacyCommand, diplomacy_request, proposal_outcome
 from .starbase_commands import starbase_request
+from .army_commands import army_request, starbase_army_planets
 from .species_rights_commands import CATEGORIES as SPECIES_RIGHT_CATEGORIES, category_of, species_right_request
 from .decision_commands import (ResolvedDecisionCommand, decision_definition, decision_outcome, decision_request,
                                 list_planet_decisions as planet_decision_listing)
@@ -432,6 +433,9 @@ class DirectConnection:
 
     def starbase_command(self, kind: str, definition=None, **payload) -> dict:
         return self._extended(starbase_request(kind, definition, **payload))
+
+    def army_command(self, kind: str, definition=None, **payload) -> dict:
+        return self._extended(army_request(kind, definition, **payload))
 
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
@@ -1329,6 +1333,63 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         """
         return await _queue_starbase("queue_starbase_building", "starbase_buildings", starbase_id, slot, building_id)
 
+    def _army_known(army_type: str) -> dict | None:
+        try:
+            found = knowledge().lookup("armies", army_type, [])
+        except ValueError as error:
+            return {"status": "blocked", "reason": "Exact definition facts are required before submission: " + str(error)}
+        if not isinstance(found, dict) or found.get("status") != "found":
+            return {"status": "blocked", "reason": "The army type was not found in versioned game knowledge"}
+        return None
+
+    @server.tool(annotations=writing)
+    async def recruit_army(planet_id: str, army_type: str, species_id: str) -> dict:
+        """Recruit one army on one owned planet through its normal army build queue.
+
+        A planet builds one army at a time: a planet whose army queue already
+        holds an item is rejected. Read planets from observe_empire
+        state.army_queues and species ids from state.species. The game's
+        validator checks species eligibility and cost. Verified as one new paid
+        buildable_army item of exactly that type, species and colony.
+        """
+        blocked = _army_known(army_type)
+        if blocked is not None:
+            return blocked
+        return await call_write(connection.army_command, "recruit_army", True, planet_id=planet_id,
+                                army_type=army_type, species_id=species_id)
+
+    @server.tool(annotations=writing)
+    async def recruit_armies_at_starbase(starbase_id: str, army_type: str, species_id: str) -> dict:
+        """Recruit one army on every owned planet in an owned starbase's system; they rally at the starbase.
+
+        Planets whose army queue is busy are skipped. Each planet is a separate
+        normal native command verified like recruit_army (buildable_army with
+        starbase set). Stops at the first planet that is not verified; earlier
+        armies stay queued. Returns one receipt per planet.
+        """
+        blocked = _army_known(army_type)
+        if blocked is not None:
+            return blocked
+        observed = await call_write(connection.observe)
+        state = observed.get("state") if isinstance(observed, dict) else None
+        if not isinstance(state, dict):
+            return {"status": "blocked", "reason": "No current observation"}
+        try:
+            planets = starbase_army_planets(state, starbase_id)
+        except ValueError as error:
+            return {"status": "blocked", "reason": str(error)}
+        if not planets:
+            return {"status": "blocked", "reason": "No owned planet with an idle army queue in that starbase's system"}
+        receipts = []
+        for planet_id in planets:
+            result = await call_write(connection.army_command, "recruit_army", True, planet_id=planet_id,
+                                      army_type=army_type, species_id=species_id, starbase_id=starbase_id)
+            receipts.append({"planet_id": planet_id, "result": result})
+            if not isinstance(result, dict) or result.get("status") != "command_verified":
+                return {"status": "partial" if len(receipts) > 1 else (result or {}).get("status", "blocked"),
+                        "planets": planets, "receipts": receipts}
+        return {"status": "command_verified", "planets": planets, "receipts": receipts}
+
     @server.tool(annotations=readonly)
     async def list_diplomacy() -> dict:
         """List our side of every known relation: contact, communications, hostility and border state.
@@ -1497,6 +1558,7 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "set_species_right": "Change one category of our primary species' rights with normal checks",
                                     "queue_starbase_module": "Queue one starbase module in a free slot with normal payment",
                                     "queue_starbase_building": "Queue one starbase building in a free slot with normal payment",
+                                    "recruit_army": "Recruit one army on an owned planet (or all planets of a starbase's system)",
                                     "set_fleet_stance": "Set one owned fleet's passive/aggressive/evasive stance normally",
                                     "move_queue_item": "Move one owned construction item one place up or down in its queue",
                                     "queue_defense_platform": "Queue one defense platform at an owned starbase with normal payment",
