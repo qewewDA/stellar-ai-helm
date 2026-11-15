@@ -19,13 +19,15 @@ from .diplomacy_commands import (DiplomacyRequest, ResolvedDiplomacyCommand, res
                                  verify_diplomacy_command, native_diplomacy_payload)
 from .decision_commands import (DecisionRequest, ResolvedDecisionCommand, resolve_decision_command,
                                 verify_decision_command, native_decision_payload)
+from .species_rights_commands import (SpeciesRightRequest, ResolvedSpeciesRightCommand, resolve_species_right,
+                                      verify_species_right, native_species_right_payload)
 
 
 REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest, ControlRequest,
-                 EventRequest, DiplomacyRequest, DecisionRequest)
+                 EventRequest, DiplomacyRequest, DecisionRequest, SpeciesRightRequest)
 RESOLVED_TYPES = (ShipConstruction, ResolvedPlanetCommand, FleetOperation, ColonyShipConstruction,
                   ResolvedCountryCommand, ResolvedControlCommand, ResolvedEventCommand, ResolvedDiplomacyCommand,
-                  ResolvedDecisionCommand)
+                  ResolvedDecisionCommand, ResolvedSpeciesRightCommand)
 
 
 def resolve_extended(state, request):
@@ -47,6 +49,8 @@ def resolve_extended(state, request):
         return resolve_diplomacy_command(state, request)
     if isinstance(request, DecisionRequest):
         return resolve_decision_command(state, request)
+    if isinstance(request, SpeciesRightRequest):
+        return resolve_species_right(state, request)
     raise ValueError("Unsupported extended native request")
 
 
@@ -69,6 +73,8 @@ def verify_extended(before, after, command):
         return verify_diplomacy_command(before, after, command)
     if isinstance(command, ResolvedDecisionCommand):
         return verify_decision_command(before, after, command)
+    if isinstance(command, ResolvedSpeciesRightCommand):
+        return verify_species_right(before, after, command)
     return False
 
 
@@ -99,4 +105,6 @@ def extended_payload(command, token):
         return native_diplomacy_payload(command, token)
     if isinstance(command, ResolvedDecisionCommand):
         return native_decision_payload(command, token)
+    if isinstance(command, ResolvedSpeciesRightCommand):
+        return native_species_right_payload(command, token)
     raise ValueError("Unsupported resolved native command")

@@ -102,7 +102,7 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "list_pending_events", "choose_event_option",
                           "list_diplomacy", "close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
                           "harm_relations", "improve_relations", "propose_diplomacy",
-                          "list_planet_decisions", "enact_planet_decision",
+                          "list_planet_decisions", "enact_planet_decision", "list_species_rights", "set_species_right",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
                           "plan_intent",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}
@@ -110,6 +110,8 @@ def test_tool_contract_separates_observation_from_writes(config_path):
     assert tools["list_pending_events"].annotations.readOnlyHint is True
     assert tools["list_planet_decisions"].annotations.readOnlyHint is True
     assert tools["enact_planet_decision"].annotations.readOnlyHint is False
+    assert tools["list_species_rights"].annotations.readOnlyHint is True
+    assert tools["set_species_right"].annotations.readOnlyHint is False
     assert tools["choose_event_option"].annotations.readOnlyHint is False
     assert set(tools["choose_event_option"].inputSchema["properties"]) == {"player_event_id", "option_index"}
     assert tools["list_diplomacy"].annotations.readOnlyHint is True

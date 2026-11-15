@@ -45,6 +45,7 @@ from .planet_commands import planet_request
 from .country_commands import country_request, definition_from_record
 from .control_commands import control_request
 from .diplomacy_commands import PROPOSALS, ResolvedDiplomacyCommand, diplomacy_request, proposal_outcome
+from .species_rights_commands import CATEGORIES as SPECIES_RIGHT_CATEGORIES, category_of, species_right_request
 from .decision_commands import (ResolvedDecisionCommand, decision_definition, decision_outcome, decision_request,
                                 list_planet_decisions as planet_decision_listing)
 from .intent_plan import propose_plan
@@ -375,6 +376,9 @@ class DirectConnection:
 
     def decision_command(self, kind: str, definition=None, **payload) -> dict:
         return self._extended(decision_request(kind, definition, **payload))
+
+    def species_right_command(self, kind: str, definition=None, **payload) -> dict:
+        return self._extended(species_right_request(kind, definition, **payload))
 
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
@@ -1181,6 +1185,46 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                 planet_id=planet_id, decision_id=decision_id)
 
     @server.tool(annotations=readonly)
+    async def list_species_rights() -> dict:
+        """List our primary species' current rights and the known rights per category.
+
+        Read-only. Potential/allow and cooldowns need runtime evaluation; the
+        game's validator decides in set_species_right.
+        """
+        observed = await observe_empire()
+        state = observed.get("state") if isinstance(observed, dict) else None
+        if not isinstance(state, dict):
+            return {"status": "blocked", "reason": "No current observation"}
+        rights = state.get("species_rights") or {}
+        try:
+            records = [key.split(":", 1)[1] for key in knowledge().bundle["records"] if key.startswith("species_rights:")]
+        except (AttributeError, KeyError, TypeError, ValueError):
+            records = []
+        known = {name: sorted(key for key in records if category_of(key) == name) for name in SPECIES_RIGHT_CATEGORIES}
+        primary = (rights.get("entries") or {}).get("primary") if rights.get("known") is True else None
+        return {"status": "listed", "primary": primary, "known_rights": known,
+                "snapshot": observed.get("snapshot"), "date": state.get("date")}
+
+    @server.tool(annotations=writing)
+    async def set_species_right(species_id: str, right: str) -> dict:
+        """Change one species right of our primary species through the normal native command.
+
+        The right's category comes from its key prefix (citizenship_, living_standard_,
+        military_service_, slavery_, purge_, population_control_, colonization_control_,
+        migration_control_). Requires a paused session and the right in versioned
+        knowledge; the game's validator checks potential, allow and cooldowns.
+        Verified when exactly that category changed on the primary entry.
+        """
+        try:
+            found = knowledge().lookup("species_rights", right, [])
+        except ValueError as error:
+            return {"status": "blocked", "reason": "Exact definition facts are required before submission: " + str(error)}
+        if not isinstance(found, dict) or found.get("status") != "found":
+            return {"status": "blocked", "reason": "The right was not found in versioned game knowledge"}
+        return await call_write(connection.species_right_command, "set_species_right", True,
+                                species_id=species_id, right=right)
+
+    @server.tool(annotations=readonly)
     async def list_diplomacy() -> dict:
         """List our side of every known relation: contact, communications, hostility and border state.
 
@@ -1339,6 +1383,7 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "activate_edict": "Activate one edict with normal legality checks and exact payment",
                                     "deactivate_edict": "Cancel one active edict normally, verifying no refund",
                                     "enact_planet_decision": "Enact one planetary decision on an owned planet with normal checks",
+                                    "set_species_right": "Change one category of our primary species' rights with normal checks",
                                     "set_fleet_stance": "Set one owned fleet's passive/aggressive/evasive stance normally",
                                     "move_queue_item": "Move one owned construction item one place up or down in its queue",
                                     "queue_defense_platform": "Queue one defense platform at an owned starbase with normal payment",
