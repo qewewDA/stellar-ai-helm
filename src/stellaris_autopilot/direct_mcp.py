@@ -66,6 +66,7 @@ from .assistant_prompts import register_prompts
 from .action_context import current_plan_context, verified_context
 from .task_plan import PlanSteps
 from .observation_view import apply_observation_view, observation_view
+from .availability import NATIVE_BATCH, build_candidates, mark_unqueried_groups, shape_availability
 from .task_workflow import TaskWorkflow
 from .completion_goal import CompletionIntent, TimeAuthorization
 from .completion_workflow import CompletionWorkflow
@@ -253,6 +254,7 @@ class DirectConnection:
     def __init__(self, config_path: Path, *, native_bridge: NativeResearchBridge | None = None):
         self.config_path = Path(config_path)
         self.native_bridge = native_bridge
+        self.knowledge_provider = None
         self._plan_local = threading.local()
         _configuration(self.config_path)
 
@@ -291,6 +293,101 @@ class DirectConnection:
         finally:
             journal.close()
 
+    def _knowledge_bundle(self):
+        provider = getattr(self, "knowledge_provider", None)
+        if provider is None:
+            return None
+        try:
+            knowledge = provider() if callable(provider) else provider
+        except (ValueError, OSError, TypeError, AttributeError):
+            return None
+        bundle = getattr(knowledge, "bundle", knowledge)
+        return bundle if isinstance(bundle, dict) else None
+
+    def _query_availability(self, state: dict, *, config: DirectConfig) -> dict:
+        bundle = self._knowledge_bundle()
+        unqueried = shape_availability(state, bundle or {}, None, queried=False)
+        if bundle is None:
+            unqueried["reason"] = "Versioned knowledge is not attached"
+            return unqueried
+        if self.native_bridge is None or getattr(self.native_bridge, "supports_wakeup", False) is not True:
+            unqueried["reason"] = "Native availability query requires a paused, connected window session"
+            return unqueried
+        runtime = getattr(self.native_bridge, "last_runtime", None)
+        if not isinstance(runtime, dict) or runtime.get("paused") is not True:
+            unqueried["reason"] = "The live game must still be paused before availability can be queried"
+            return unqueried
+        candidates, skipped = build_candidates(state, bundle)
+        skipped = mark_unqueried_groups(candidates, skipped)
+        if not candidates:
+            return shape_availability(state, bundle, [], queried=True, skipped=skipped)
+        results: list = []
+        started = time.monotonic()
+        for offset in range(0, len(candidates), NATIVE_BATCH):
+            batch = candidates[offset:offset + NATIVE_BATCH]
+            token = uuid.uuid4().hex
+            try:
+                self.native_bridge.query_availability(batch, token)
+                deadline = time.monotonic() + config.verification_timeout_seconds
+                done = False
+                while time.monotonic() < deadline:
+                    if (config.state_dir / "STOP").exists():
+                        unqueried["reason"] = "Stopped while querying availability"
+                        return unqueried
+                    status = self.native_bridge.result(token)
+                    if status.get("status") == "queried" and status.get("token") == token:
+                        results.extend(status.get("results") or [])
+                        done = True
+                        break
+                    if status.get("status") in {"blocked", "ambiguous", "cancelled", "unknown"}:
+                        unqueried["reason"] = "The native availability query did not complete"
+                        unqueried["native_status"] = status.get("status")
+                        return unqueried
+                    time.sleep(0.02)
+                if not done:
+                    unqueried["reason"] = "Timed out waiting for the native availability query"
+                    return unqueried
+            except (ValueError, OSError) as exc:
+                unqueried["reason"] = "Availability query failed"
+                unqueried["error"] = str(exc)
+                return unqueried
+            finally:
+                try:
+                    self.native_bridge.cancel(token)
+                except (ValueError, OSError):
+                    pass
+        shaped = shape_availability(state, bundle, results, queried=True, skipped=skipped)
+        shaped["candidates_checked"] = len(candidates)
+        shaped["query_seconds"] = round(time.monotonic() - started, 3)
+        return shaped
+
+    def _can_query_availability(self) -> bool:
+        if self._knowledge_bundle() is None:
+            return False
+        if self.native_bridge is None or getattr(self.native_bridge, "supports_wakeup", False) is not True:
+            return False
+        runtime = getattr(self.native_bridge, "last_runtime", None)
+        return isinstance(runtime, dict) and runtime.get("paused") is True
+
+    def _attach_availability(self, result: dict, *, already_locked: bool, config: DirectConfig) -> dict:
+        state = result.get("state") if isinstance(result, dict) else None
+        if not isinstance(state, dict):
+            return result
+        if not already_locked and not self._can_query_availability():
+            availability = self._query_availability(state, config=config)
+        elif already_locked:
+            availability = self._query_availability(state, config=config)
+        else:
+            try:
+                with _controller_lock(config):
+                    availability = self._query_availability(state, config=config)
+            except DirectLockBusy:
+                availability = shape_availability(state, self._knowledge_bundle() or {}, None, queried=False)
+                availability["reason"] = "Another writer owns the game mailbox; availability was not queried"
+        attached = dict(result)
+        attached["state"] = {**state, "availability": availability}
+        return attached
+
     def observe(self) -> dict:
         config = _configuration(self.config_path)
         observation = self._read(DirectObserver(config.dump_path, config.country_id))
@@ -298,6 +395,7 @@ class DirectConnection:
         validate_connection(config, observation, require_fresh=False)
         result = {**_public(observation), "fresh": fresh(observation, config.max_snapshot_age_seconds),
                   "capability": "experimental fixed direct actions"}
+        result = self._attach_availability(result, already_locked=False, config=config)
         journal_path = config.state_dir / "journal.sqlite"
         if not journal_path.is_file():
             return result
@@ -312,6 +410,7 @@ class DirectConnection:
         with _controller_lock(config):
             result = self._fresh_observation(config, DirectObserver(config.dump_path, config.country_id))
             result.pop("_observation", None)
+            result = self._attach_availability(result, already_locked=True, config=config)
             journal_path = config.state_dir / "journal.sqlite"
             if not journal_path.is_file():
                 return result
@@ -1027,6 +1126,12 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
             raise ValueError("Knowledge version does not match the configured game")
         return result
 
+    if hasattr(connection, "knowledge_provider") or getattr(connection, "__dict__", None) is not None:
+        try:
+            connection.knowledge_provider = knowledge
+        except (AttributeError, TypeError):
+            pass
+
     @server.tool(annotations=readonly)
     def search_game_knowledge(query: str, category: str | None = None, limit: int = 8) -> dict:
         """Find exact game IDs by Chinese/English name or ID in versioned local data and imported Wiki pages."""
@@ -1167,9 +1272,13 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         view='brief' (default) returns a planning subset: date, snapshot,
         resources, fleets/ships, wars, claims, construction, diplomacy
         pacts/proposals, pause, compact control queues, own planets
-        (planet_id, districts, zones, building instances, construction queue),
-        research candidates, our pending events, main species rights, and
-        current policies/edicts. Missing keys are omitted; unknown facts stay
+        (planet_id, districts, zones, building instances, construction queue,
+        available_decisions with enactable/reason, active decisions),
+        research candidates, our pending events, every observed species'
+        current rights and valid options, and current policies/edicts with
+        currently enactable options and activatable edicts. Availability is
+        refreshed from the game's validator on every observation when the
+        session is paused and connected. Missing keys are omitted; unknown facts stay
         marked unknown (never rewritten as empty lists). view='full' returns
         the complete observation. If commands were accepted and not yet
         settled, deferred_verification.pending is true and this snapshot may
@@ -1353,21 +1462,22 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
 
     @server.tool(annotations=readonly)
     async def list_policies() -> dict:
-        """List our active policies with selection, cooldown and each option's required traditions.
+        """List current policies and edicts with the game's own enactable verdict.
 
-        Read-only. Options needing a tradition we lack are rejected by the game's
-        validator in set_policy (e.g. every trade_policy option but the default).
+        Refreshes availability on this observation. Each policy option and
+        activatable edict is marked enactable true/false; a failure reason is
+        included when the validator supplies one. Options that cannot pass
+        potential (including static always=no) are omitted.
         """
         observed = await observe_empire(view="full")
         state = observed.get("state") if isinstance(observed, dict) else None
         if not isinstance(state, dict):
             return {"status": "blocked", "reason": "No current observation"}
-        try:
-            bundle = knowledge().bundle["records"]
-        except (AttributeError, KeyError, TypeError, ValueError):
-            return {"status": "blocked", "reason": "Versioned knowledge with policies is required"}
-        records = {key.split(":", 1)[1]: record for key, record in bundle.items() if key.startswith("policies:")}
-        return {**policy_listing(state, records), "snapshot": observed.get("snapshot"), "date": state.get("date")}
+        availability = state.get("availability") if isinstance(state.get("availability"), dict) else {}
+        return {"status": "listed", "known": availability.get("known"),
+                "policies": availability.get("policies"), "edicts": availability.get("edicts"),
+                "reason": availability.get("reason"),
+                "snapshot": observed.get("snapshot"), "date": state.get("date")}
 
     @server.tool(annotations=writing)
     async def set_policy(policy_id: str, option_id: str) -> dict:
@@ -1483,22 +1593,22 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
 
     @server.tool(annotations=readonly)
     async def list_planet_decisions() -> dict:
-        """List our planets (with their timed modifiers) and the planet decisions from versioned knowledge.
+        """List currently available planet decisions from the game's own validator.
 
-        Reads the latest snapshot only; never publishes a command. Shows each
-        decision's base cost and marks decisions an observed modifier already
-        blocks. Other potential/allow conditions are decided by the game's
-        validator in enact_planet_decision.
+        Refreshes availability on this observation. Each owned planet gets
+        available_decisions (decision_id, cost, enactable, and the game's
+        failure reason when one exists) plus any queued/active decisions.
+        Decisions that cannot pass potential (including static always=no) are
+        omitted. Never publishes a command.
         """
         observed = await call_write(connection.observe)
         state = observed.get("state") if isinstance(observed, dict) else None
-        if not isinstance(state, dict) or (state.get("planet_modifiers") or {}).get("known") is not True:
-            return {"status": "blocked", "reason": "Planet modifiers are not exactly observable in this snapshot"}
-        try:
-            records = [record for key, record in knowledge().bundle["records"].items() if key.startswith("decisions:")]
-        except (ValueError, KeyError, AttributeError):
-            return {"status": "blocked", "reason": "Versioned knowledge with decisions is required"}
-        return {**planet_decision_listing(state, records), "snapshot": observed.get("snapshot"), "date": state.get("date")}
+        if not isinstance(state, dict):
+            return {"status": "blocked", "reason": "No current observation"}
+        availability = state.get("availability") if isinstance(state.get("availability"), dict) else {}
+        return {"status": "listed", "known": availability.get("known"),
+                "planets": availability.get("planets"), "reason": availability.get("reason"),
+                "snapshot": observed.get("snapshot"), "date": state.get("date")}
 
     @server.tool(annotations=writing)
     async def enact_planet_decision(planet_id: str, decision_id: str) -> dict:
@@ -1519,23 +1629,20 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
 
     @server.tool(annotations=readonly)
     async def list_species_rights() -> dict:
-        """List our primary species' current rights and the known rights per category.
+        """List current rights and valid options for each of our observed species.
 
-        Read-only. Potential/allow and cooldowns need runtime evaluation; the
-        game's validator decides in set_species_right.
+        Refreshes availability on this observation. The primary species' options
+        are marked enactable by the game's validator; other species stay
+        options_known=false when the native command cannot evaluate them.
         """
         observed = await observe_empire(view="full")
         state = observed.get("state") if isinstance(observed, dict) else None
         if not isinstance(state, dict):
             return {"status": "blocked", "reason": "No current observation"}
-        rights = state.get("species_rights") or {}
-        try:
-            records = [key.split(":", 1)[1] for key in knowledge().bundle["records"] if key.startswith("species_rights:")]
-        except (AttributeError, KeyError, TypeError, ValueError):
-            records = []
-        known = {name: sorted(key for key in records if category_of(key) == name) for name in SPECIES_RIGHT_CATEGORIES}
-        primary = (rights.get("entries") or {}).get("primary") if rights.get("known") is True else None
-        return {"status": "listed", "primary": primary, "known_rights": known,
+        availability = state.get("availability") if isinstance(state.get("availability"), dict) else {}
+        rights = availability.get("species_rights") if isinstance(availability.get("species_rights"), dict) else state.get("species_rights")
+        return {"status": "listed", "known": (rights or {}).get("known"),
+                "species_rights": rights, "reason": availability.get("reason"),
                 "snapshot": observed.get("snapshot"), "date": state.get("date")}
 
     @server.tool(annotations=writing)

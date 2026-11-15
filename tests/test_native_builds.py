@@ -382,7 +382,8 @@ def test_legacy_render_is_byte_identical_to_the_packaged_sources():
     assert native_builds.LEGACY_ONLY_SOURCES == ("native_country.js", "native_control.js", "native_events.js",
                                                 "native_diplomacy.js", "native_decision.js",
                                                 "native_species_rights.js", "native_starbase.js", "native_army.js", "native_claim.js",
-                                                "native_war.js", "native_ship_design.js")
+                                                "native_war.js", "native_ship_design.js",
+                                                "native_availability.js")
     assert "0x6d1b90" in rendered and "0x6d2a80" not in rendered
     assert GUARD_ERROR not in rendered and "rpc.exports.enqueue =" not in rendered
 

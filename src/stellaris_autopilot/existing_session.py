@@ -198,6 +198,7 @@ class ExistingGameSession:
                 self._persist_status()
                 return self._blocked_result()
             self._runtime = runtime
+            self._bind_knowledge()
             with self._state_lock:
                 self._state, self._phase_name = "connected", "ready"
                 self._elapsed = time.monotonic() - self._started
@@ -275,6 +276,15 @@ class ExistingGameSession:
                 self._knowledge = GameKnowledge.load(self.knowledge_bundle)
             return self._knowledge
 
+    def _bind_knowledge(self, connection=None) -> None:
+        """The inner DirectConnection is created at attach time and needs the bundle."""
+        target = connection
+        if target is None and self._runtime is not None:
+            target = getattr(self._runtime, "connection", None)
+        if target is None or self.knowledge_bundle is None:
+            return
+        target.knowledge_provider = self.knowledge
+
     def __getattr__(self, name: str):
         if name not in _METHODS:
             raise AttributeError(name)
@@ -283,7 +293,9 @@ class ExistingGameSession:
             if not self._operation.acquire(blocking=False):
                 return {"status": "busy", "reason": "Another operation owns the connection; this request was not queued"}
             try:
-                return getattr(self._require().connection, name)(*args, **kwargs)
+                connection = self._require().connection
+                self._bind_knowledge(connection)
+                return getattr(connection, name)(*args, **kwargs)
             finally:
                 self._operation.release()
         return call

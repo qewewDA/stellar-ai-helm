@@ -495,6 +495,15 @@ class NativeResearchBridge:
             raise ValueError("Invalid native inbox token")
         return self._call("enqueue", {"kind": "run_inbox", "country_id": "0", "token": token})
 
+    def query_availability(self, candidates: list, token: str) -> dict:
+        """Validate-only query; never posts a command or requests a dump."""
+        if not isinstance(token, str) or not _TOKEN.fullmatch(token):
+            raise ValueError("Invalid native availability token")
+        if not isinstance(candidates, list) or not 1 <= len(candidates) <= 500:
+            raise ValueError("Availability candidates must be a list of 1..500 items")
+        return self._call("enqueue", {"kind": "query_availability", "country_id": "0",
+                                      "token": token, "candidates": candidates})
+
     @property
     def supports_wakeup(self) -> bool:
         return (self.wakeup_confirmed and not self.poisoned

@@ -2,6 +2,20 @@
 from __future__ import annotations
 
 VIEW_BRIEF = "brief"
+_GENERIC = "Normal native command validation rejected"
+
+
+def _split(items, key="enactable"):
+    """Brief keeps enactable items and rejections with a specific game reason; generic rejections are counted."""
+    if not isinstance(items, list):
+        return items, None
+    kept, generic = [], 0
+    for item in items:
+        if isinstance(item, dict) and item.get(key) is False and not item.get("selected") and item.get("reason") in (None, _GENERIC):
+            generic += 1
+            continue
+        kept.append(item)
+    return kept, generic
 VIEW_FULL = "full"
 VIEWS = frozenset({VIEW_BRIEF, VIEW_FULL})
 
@@ -13,6 +27,7 @@ _BRIEF_STATE = (
     "fleets", "ships", "wars", "claims", "construction", "diplomacy",
     "army_queues", "starbase_slots", "control_state",
     "planets", "research", "pending_events", "species_rights", "policies_edicts",
+    "availability",
 )
 _BRIEF_TOP = ("status", "snapshot", "modified_at", "date", "deferred_verification")
 
@@ -59,6 +74,9 @@ def _compact_brief_state(state: dict) -> dict:
     policies = _brief_policies(state)
     if policies is not None:
         compact["policies_edicts"] = policies
+    availability = _brief_availability(state)
+    if availability is not None:
+        compact["availability"] = availability
     return compact
 
 
@@ -105,6 +123,23 @@ def _brief_planets(state: dict):
         planet_id = str(planet.get("id") or "")
         if queues is not None and planet_id in queues:
             item["construction_queue"] = queues[planet_id]
+        info = _availability_planet(state, planet_id)
+        if info is not None:
+            if info.get("available_decisions_known") is True:
+                kept, generic = _split(info.get("available_decisions"))
+                item["available_decisions"] = kept
+                if generic:
+                    item["decisions_rejected_without_reason"] = generic
+            else:
+                item["available_decisions_known"] = False
+            if info.get("active_decisions") is not None:
+                item["active_decisions"] = info.get("active_decisions")
+        construction = _availability_construction_planet(state, planet_id)
+        if construction is not None:
+            item["available_districts"] = construction.get("available_districts")
+            item["available_buildings"] = construction.get("available_buildings")
+            if construction.get("known") is False:
+                item["available_construction_known"] = False
         compact.append(item)
     return compact
 
@@ -216,18 +251,53 @@ def _compact_event(event: dict) -> dict:
 
 
 def _brief_species_rights(state: dict):
-    rights = state.get("species_rights")
+    availability = state.get("availability") if isinstance(state.get("availability"), dict) else {}
+    rights = availability.get("species_rights") if isinstance(availability.get("species_rights"), dict) else state.get("species_rights")
     if rights is None:
         return None
     if not isinstance(rights, dict):
         return rights
+    if isinstance(rights.get("entries"), list):
+        return {"known": rights.get("known"), "entries": rights.get("entries"),
+                "options_source": rights.get("options_source"), "note": rights.get("note")}
     entries = rights.get("entries") if isinstance(rights.get("entries"), dict) else {}
     primary = entries.get("primary") if isinstance(entries.get("primary"), dict) else None
     result = {"known": rights.get("known"), "primary": primary}
+    others = {name: entry for name, entry in entries.items() if name != "primary"}
+    if others:
+        result["other_species"] = others
     return result
 
 
 def _brief_policies(state: dict):
+    availability = state.get("availability") if isinstance(state.get("availability"), dict) else {}
+    policies_block = availability.get("policies") if isinstance(availability.get("policies"), dict) else None
+    edicts_block = availability.get("edicts") if isinstance(availability.get("edicts"), dict) else None
+    if policies_block is not None or edicts_block is not None:
+        policies = []
+        rejected = 0
+        for entry in (policies_block or {}).get("policies") or []:
+            if not isinstance(entry, dict):
+                continue
+            kept, generic = _split(entry.get("options"))
+            rejected += generic or 0
+            policies.append({**entry, "options": kept})
+        edicts, edicts_rejected = _split((edicts_block or {}).get("activatable"))
+        result = {
+            "known": (policies_block or {}).get("known") if policies_block is not None else (edicts_block or {}).get("known"),
+            "policies": policies if policies_block is not None else None,
+            "edicts_active": (edicts_block or {}).get("active"),
+            "edicts_activatable": edicts,
+        }
+        if rejected:
+            result["policy_options_rejected_without_reason"] = rejected
+        if edicts_rejected:
+            result["edicts_rejected_without_reason"] = edicts_rejected
+        if (policies_block or {}).get("reason"):
+            result["policies_reason"] = policies_block["reason"]
+        if (edicts_block or {}).get("reason"):
+            result["edicts_reason"] = edicts_block["reason"]
+        return result
     controls = state.get("country_controls")
     if controls is None:
         return None
@@ -248,3 +318,95 @@ def _brief_policies(state: dict):
                     item[key] = entry[key]
         edicts.append(item)
     return {"known": controls.get("known"), "policies": policies, "edicts": edicts}
+
+
+def _availability_planet(state: dict, planet_id: str):
+    availability = state.get("availability") if isinstance(state.get("availability"), dict) else None
+    if not isinstance(availability, dict) or not isinstance(availability.get("planets"), list):
+        return None
+    for item in availability["planets"]:
+        if isinstance(item, dict) and str(item.get("planet_id")) == str(planet_id):
+            return item
+    return None
+
+
+def _availability_construction_planet(state: dict, planet_id: str):
+    availability = state.get("availability") if isinstance(state.get("availability"), dict) else None
+    construction = availability.get("construction") if isinstance(availability, dict) else None
+    if not isinstance(construction, dict) or not isinstance(construction.get("planets"), list):
+        return None
+    for item in construction["planets"]:
+        if not isinstance(item, dict) or str(item.get("planet_id")) != str(planet_id):
+            continue
+        districts = [entry for entry in item.get("available_districts") or []
+                     if isinstance(entry, dict) and entry.get("enactable") is True]
+        buildings = []
+        for zone in item.get("zones") or []:
+            if not isinstance(zone, dict):
+                continue
+            available = [entry for entry in zone.get("available_buildings") or []
+                         if isinstance(entry, dict) and entry.get("enactable") is True]
+            if available:
+                buildings.append({"zone_id": zone.get("zone_id"), "available_buildings": available})
+        return {"known": construction.get("known"), "available_districts": districts,
+                "available_buildings": buildings}
+    return None
+
+
+def _brief_availability(state: dict):
+    availability = state.get("availability")
+    if availability is None:
+        return None
+    if not isinstance(availability, dict):
+        return availability
+    result = {"known": availability.get("known")}
+    if availability.get("reason"):
+        result["reason"] = availability["reason"]
+    if availability.get("skipped"):
+        result["skipped"] = availability["skipped"]
+    for key in ("candidates_checked", "query_seconds"):
+        if key in availability:
+            result[key] = availability[key]
+    war = availability.get("war_goals")
+    if isinstance(war, dict):
+        result["war_goals"] = {
+            "known": war.get("known"),
+            "by_country": [
+                {"country_id": entry.get("country_id"),
+                 "war_goals": [goal for goal in entry.get("war_goals") or []
+                               if isinstance(goal, dict) and goal.get("enactable") is True]}
+                for entry in war.get("by_country") or [] if isinstance(entry, dict)
+            ] if war.get("known") is True else None,
+        }
+        if war.get("reason"):
+            result["war_goals"]["reason"] = war["reason"]
+    starbases = availability.get("starbases")
+    if isinstance(starbases, dict):
+        listed = []
+        if starbases.get("known") is True:
+            for entry in starbases.get("starbases") or []:
+                if not isinstance(entry, dict):
+                    continue
+                modules = []
+                for slot in entry.get("modules") or []:
+                    if not isinstance(slot, dict):
+                        continue
+                    available = [item for item in slot.get("available") or []
+                                 if isinstance(item, dict) and item.get("enactable") is True]
+                    if available:
+                        modules.append({"slot": slot.get("slot"), "current": slot.get("current"),
+                                        "available": available})
+                buildings = []
+                for slot in entry.get("buildings") or []:
+                    if not isinstance(slot, dict):
+                        continue
+                    available = [item for item in slot.get("available") or []
+                                 if isinstance(item, dict) and item.get("enactable") is True]
+                    if available:
+                        buildings.append({"slot": slot.get("slot"), "current": slot.get("current"),
+                                          "available": available})
+                listed.append({"starbase_id": entry.get("starbase_id"), "modules": modules,
+                               "buildings": buildings})
+        result["starbases"] = {"known": starbases.get("known"), "starbases": listed if starbases.get("known") is True else None,
+                               **({"reason": starbases["reason"]} if starbases.get("reason") else {})}
+    return result

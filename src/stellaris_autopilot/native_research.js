@@ -326,6 +326,18 @@ function consumePending(source = 'run') {
                     game_thread_id: Process.getCurrentThreadId(), execution_source: source, runtime: pauseState()});
                 return;
             }
+            if (request.kind === 'query_availability') {
+                if (typeof queryAvailability !== 'function') {
+                    throw new NativePreconditionError('Availability query is not available on this build');
+                }
+                if (pauseState().paused !== true) {
+                    throw new NativePreconditionError('The live game must still be paused before this command');
+                }
+                const results = queryAvailability(requests.get(request.token) || request);
+                states.set(request.token, {status: 'queried', consumed: true, submitted: false, results,
+                    game_thread_id: Process.getCurrentThreadId(), execution_source: source, runtime: pauseState()});
+                return;
+            }
             if (!['select_research', 'set_paused', 'queue_building', 'queue_district'].includes(request.kind)) {
                 if (pauseState().paused !== true) {
                     throw new NativePreconditionError('The live game must still be paused before this command');
@@ -540,7 +552,8 @@ rpc.exports = {
                 || (typeof canonicalArmyRequest === 'function' ? canonicalArmyRequest(request) : null)
                 || (typeof canonicalClaimRequest === 'function' ? canonicalClaimRequest(request) : null)
                 || (typeof canonicalWarRequest === 'function' ? canonicalWarRequest(request) : null)
-                || (typeof canonicalShipDesignRequest === 'function' ? canonicalShipDesignRequest(request) : null);
+                || (typeof canonicalShipDesignRequest === 'function' ? canonicalShipDesignRequest(request) : null)
+                || (typeof canonicalAvailabilityRequest === 'function' ? canonicalAvailabilityRequest(request) : null);
             if (canonical === null) throw new Error('Unknown native kind or malformed typed payload');
         }
         if (states.has(request.token)) {

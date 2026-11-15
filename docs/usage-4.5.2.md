@@ -25,7 +25,7 @@
 ## 3. 典型流程
 
 1. `connect_game()`（游戏须已暂停）→ `attached_status()` 确认 `connected`。
-2. `observe_empire()` 默认返回 brief 规划视图；需要完整状态时传 `view="full"`。需要最新数据时先 `request_observation()`（同样默认 brief）。
+2. `observe_empire()` 默认返回 brief 规划视图；需要完整状态时传 `view="full"`。需要最新数据时先 `request_observation()`（同样默认 brief）。每次观察（会话已连接且暂停时）都会用游戏自带的 potential/allow 校验刷新可用性：决议/政策/法令只返回通过 potential 的项，并标 `enactable` 与失败原因。
 3. 调用玩法工具。默认是 **fast 模式**：游戏自带校验器接受命令后立即返回 `command_accepted`（`deferred_verification: pending`），不做逐条核验 dump。随后一次 `request_observation` 或（若有待核验项）`session_brief` 会打一份 dump，用 `deferred_verification.verifications[]`（字段 `id` / `action` / `status` / `reason`，status 为 `verified` / `failed` / `unverified`）结算所有已接受的操作。`observe_empire` 只读、不 dump；若有未结算的 accepted 写操作，会标 `deferred_verification.pending=true`，并说明快照可能早于那些写入。需要旧的严格路径时，给 `execute_plan(..., verify=true)` 或设置环境变量 `STELLARIS_AUTOPILOT_VERIFY=1`：此时仍返回 `command_verified` 才算严格成功。`blocked` 带原因，未发出命令。未在延期核验中确定的操作会留在日志（`unverified`），**不要重放**。
 4. 推进时间：`set_paused(false)` / `set_paused(true)`，或 `execute_plan` 批量执行。`execute_plan` 的 step kind 已覆盖原先仅有单项工具的操作：`set_species_right`、`enact_planet_decision`、`queue_starbase_module`、`queue_starbase_building`、`recruit_army`、`recruit_armies_at_starbase`、`add_system_claim`、`declare_war`、`offer_peace`、`set_ship_design`（参数与单项工具相同）。外交仍用已有 `propose_*` / `close_borders` 等 kind，没有 `propose_diplomacy` kind。fast 模式下整份计划在所有步骤都被校验器接受后返回 `command_accepted`；延期核验由下一次观察 dump 统一结算。
 5. 结束：`checkpoint_game()`（检查点写入 `save games/qs_mcp`，不覆盖原存档）→ `disconnect_game(save=false)`。游戏保持运行。
@@ -37,12 +37,12 @@
 | 类别 | 工具 | 状态 |
 | --- | --- | --- |
 | 连接/时间 | `connect_game` `attached_status` `checkpoint_game` `disconnect_game` `set_paused` `probe_connection` | 实机通过 |
-| 观察 | `observe_empire(view)` `request_observation(view)` `session_brief` `list_actions` `status` | `observe_empire`/`request_observation` 默认为 `view="brief"`（规划子集：日期、snapshot、资源、舰队/舰船、战争、宣称、建造队列、外交 pacts/proposals、暂停、己方星球 planet_id/区划/区块/建筑实例与建造队列、研究当前项与备选、我方待处理事件、主物种权利、现行政策与法令）；缺省字段省略，未知事实保持 `known:false`，不会改写成空列表。完整状态用 `view="full"`。`request_observation` 会结算待核验的 accepted 写操作。`session_brief` 在未连接时会 `connect_game(retry=false)` 一次（失败不重试；未暂停不 dump）；已连接且无待核验项时只读最新快照，有待核验项时会打一份 dump 并结算。 |
+| 观察 | `observe_empire(view)` `request_observation(view)` `session_brief` `list_actions` `status` | `observe_empire`/`request_observation` 默认为 `view="brief"`（规划子集：日期、snapshot、资源、舰队/舰船、战争、宣称、建造队列、外交 pacts/proposals、暂停、己方星球 planet_id/区划/区块/建筑实例与建造队列、`available_decisions[]`（`decision_id`/`cost`/`enactable`/`reason`）与 `active_decisions`、研究当前项与备选、我方待处理事件、各物种当前权利与可行选项、现行政策选项与可激活法令（带花费与失败原因））；缺省字段省略，未知事实保持 `known:false`，不会改写成空列表。决议/政策/法令的可用性来自游戏校验器对 potential/allow 的即时判定，不是静态清单。完整状态用 `view="full"`。`request_observation` 会结算待核验的 accepted 写操作。`session_brief` 在未连接时会 `connect_game(retry=false)` 一次（失败不重试；未暂停不 dump）；已连接且无待核验项时只读最新快照，有待核验项时会打一份 dump 并结算。 |
 | 研究/建设 | `select_research` `queue_district` `queue_building` `upgrade_building` `demolish_building` `convert_zone` `cancel_construction` `move_queue_item` | 见 direct-control.md |
 | 造舰/舰队 | `queue_ship` `queue_colony_ship` `issue_order` `survey_planet` `build_station` `colonize_planet` `set_fleet_stance` | 见 direct-control.md；`fleet_wait` 本轮复测通过 |
-| 政策/法令 | `list_policies` `set_policy` `activate_edict` `deactivate_edict` | `set_policy`（贸易政策）实机通过 |
-| 物种权利 | `list_species_rights` `set_species_right` | 实机通过 |
-| 星球决议 | `list_planet_decisions` `enact_planet_decision` | 见 direct-control.md |
+| 政策/法令 | `list_policies` `set_policy` `activate_edict` `deactivate_edict` | `list_policies` 返回当前政策选项与可激活法令的 `enactable`/`reason`/`cost`（游戏校验器，随帝国状态刷新）。`set_policy`（贸易政策）实机通过 |
+| 物种权利 | `list_species_rights` `set_species_right` | `list_species_rights` 列出各观察物种的当前权利；主物种选项由游戏校验器标 `enactable`。实机通过 |
+| 星球决议 | `list_planet_decisions` `enact_planet_decision` | `list_planet_decisions` 按星球返回当前 `available_decisions[]`（`decision_id`/`cost`/`enactable`/`reason`）与已生效/队列中的决议；见 direct-control.md |
 | 恒星基地 | `queue_starbase_module` `queue_starbase_building` `queue_defense_platform` | 模块/建筑实机通过（需空槽位） |
 | 陆军 | `recruit_army`（单星球，一次一支，队列非空即拒绝）`recruit_armies_at_starbase`（该星系每个空闲己方星球各一支，完工后集结到该恒星基地） | 两条路径实机通过；多星球扇出仅离线测试 |
 | 宣称 | `add_system_claim`（一次 +1 宣称，消耗影响力；`state.claims.by_system` 读取） | 实机通过（对宿敌首都星系 596 叠到 2 层） |
