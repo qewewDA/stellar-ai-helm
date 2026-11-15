@@ -23,7 +23,8 @@ from mcp.types import ToolAnnotations
 from pydantic import Field, StrictBool, StrictInt
 
 from .direct import (
-    TEST_CONTACT_ACTION, TEST_EVENT_ACTION, TEST_EVENT_ID, DirectConfig, atomic_publish, disarm_inbox, load_direct_config,
+    TEST_CONTACT_ACTION, TEST_EVENT_ACTION, TEST_EVENT_ID, TEST_MERCANTILE_ACTION, TEST_MERCANTILE_TRADITIONS,
+    TEST_RESOURCE_GRANT, TEST_RESOURCES_ACTION, TEST_SETUP_ACTIONS, TEST_STARHOLD_ACTION, DirectConfig, atomic_publish, disarm_inbox, load_direct_config,
     publish_observation, publish_order, publish_pause_verification,
 )
 from .direct_observe import DirectObserver
@@ -117,6 +118,42 @@ def _test_contact_established(before: dict, after: dict) -> bool:
         and second[key].get("communications") is True
         and (first.get(key) is None or first[key].get("communications") is False)
         for key in changed)
+
+
+def _strings(value) -> set:
+    if isinstance(value, str):
+        return {value}
+    if isinstance(value, dict):
+        return set().union(*(_strings(item) for item in value.values())) if value else set()
+    if isinstance(value, list):
+        return set().union(*(_strings(item) for item in value)) if value else set()
+    return set()
+
+
+def _test_setup_verified(action_id: str, before: dict, after: dict) -> bool:
+    """Exact postconditions of the fixed test-setup effects on the same paused day."""
+    if before.get("date") != after.get("date") or after.get("country_id") != "0":
+        return False
+    if action_id == TEST_RESOURCES_ACTION:
+        old, new = before.get("resources"), after.get("resources")
+        return (isinstance(old, dict) and isinstance(new, dict) and all(
+            isinstance(old.get(key), (int, float)) and isinstance(new.get(key), (int, float))
+            and abs(new[key] - old[key] - value) < 1e-3 for key, value in TEST_RESOURCE_GRANT.items()))
+    if action_id == TEST_STARHOLD_ACTION:
+        old, new = ((state.get("control_state") or {}).get("starbase_queues") for state in (before, after))
+        if not (isinstance(old, dict) and isinstance(new, dict) and old.get("known") is True and new.get("known") is True
+                and set(old["by_id"]) == set(new["by_id"])):
+            return False
+        changed = [key for key in old["by_id"] if old["by_id"][key] != new["by_id"][key]]
+        return (len(changed) == 1 and old["by_id"][changed[0]].get("level") == "starbase_level_starport"
+                and new["by_id"][changed[0]] == {**old["by_id"][changed[0]], "level": "starbase_level_starhold"})
+    if action_id == TEST_MERCANTILE_ACTION:
+        new = (after.get("empire_build") or {}).get("traditions") or {}
+        old = (before.get("empire_build") or {}).get("traditions") or {}
+        return (new.get("known") is True and set(TEST_MERCANTILE_TRADITIONS) <= _strings(new.get("value"))
+                and not set(TEST_MERCANTILE_TRADITIONS) <= _strings(old.get("value"))
+                and (after.get("empire_build") or {}).get("government") == (before.get("empire_build") or {}).get("government"))
+    return False
 
 
 def _native_matches(result: dict | None, token: str, kind: str, payload: dict | None = None) -> bool:
@@ -400,7 +437,8 @@ class DirectConnection:
             if not supported:
                 return {"status": "blocked", "reason": "This build permits observation, pause and checkpoints; "
                         "gameplay actions need separate live verification"}
-        if order is None and selection is None and action_id not in {"probe_connection", "hold_military_fleets", TEST_EVENT_ACTION, TEST_CONTACT_ACTION}:
+        if order is None and selection is None and action_id not in {"probe_connection", "hold_military_fleets", TEST_EVENT_ACTION, TEST_CONTACT_ACTION,
+                                                                 *TEST_SETUP_ACTIONS}:
             return {"status": "blocked", "reason": "Unknown fixed direct action"}
         config = _configuration(self.config_path)
         guard = getattr(self._plan_local, "guard", None)
@@ -550,7 +588,7 @@ class DirectConnection:
                         if order is not None:
                             validate_order(after.state, order)
                         target_set_matches = (selection is not None or order is not None
-                                              or action_id in {"probe_connection", TEST_EVENT_ACTION, TEST_CONTACT_ACTION}
+                                              or action_id in {"probe_connection", TEST_EVENT_ACTION, TEST_CONTACT_ACTION, *TEST_SETUP_ACTIONS}
                                               or set(self._hold_targets(after.state)) == set(targets))
                         postconditions = (verify_extended(before.state, after.state, selection)
                                           if isinstance(selection, RESOLVED_TYPES)
@@ -573,6 +611,8 @@ class DirectConnection:
                                           if action_id == TEST_EVENT_ACTION
                                           else _test_contact_established(before.state, after.state)
                                           if action_id == TEST_CONTACT_ACTION
+                                          else _test_setup_verified(action_id, before.state, after.state)
+                                          if action_id in TEST_SETUP_ACTIONS
                                           else action_id == "probe_connection" or self._orders_verified(after.state, targets))
                         receipt = ((native_matches and native_status.get("status") == "submitted")
                                    if selection is not None else f"qs_direct_done_{token}" in flags)
@@ -624,6 +664,8 @@ class DirectConnection:
                                              if action_id == TEST_EVENT_ACTION
                                              else "Fresh state shows exactly one AI regular empire newly in communication with us; nothing else of ours changed."
                                              if action_id == TEST_CONTACT_ACTION
+                                             else "Test setup (console effect on a test save): receipt and exact postcondition verified."
+                                             if action_id in TEST_SETUP_ACTIONS
                                              else "Fresh state confirms military fleet wait orders (up to 30 days).")}
                         if self.native_bridge is not None and dump_token is None and (
                                 selection is None or (native_matches and native_status.get("status") == "submitted")):
@@ -1407,6 +1449,10 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                + TEST_EVENT_ID + "; verify it opens; never chooses an option",
             TEST_CONTACT_ACTION: "Test save only (launcher flag): establish communications with one AI regular "
                                  "empire we have none with (vanilla establish_communications_no_message)",
+            TEST_RESOURCES_ACTION: "Test save only (launcher flag): add a fixed resource grant for test setup",
+            TEST_STARHOLD_ACTION: "Test save only (launcher flag): upgrade the capital system's starport to a starhold",
+            TEST_MERCANTILE_ACTION: "Test save only (launcher flag): add the Mercantile adopt and Adaptive Economic "
+                                    "Policies traditions (unlocks trade policies) for test setup",
         }
         orders = {
             "fleet_wait": "Replace one observed fleet's orders with an exact 1–365 game-day wait",

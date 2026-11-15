@@ -951,3 +951,37 @@ def test_test_contact_verification_needs_exactly_one_new_regular_empire_in_commu
     later = {**_relations(**{"8": ("voidworms", False), "5": ("default", True)}), "date": "2209.08.07"}
     assert not direct._test_contact_established(before, later)
     assert not direct._test_contact_established({"date": "x"}, {"date": "x", "country_id": "0"})
+
+
+def test_test_setup_postconditions_are_exact():
+    base = {"date": "2200.01.24", "country_id": "0",
+            "resources": {"energy": 200.0, "minerals": 200.0, "alloys": 200.0, "food": 200.0,
+                          "consumer_goods": 100.0, "influence": 100.0, "unity": 50.0},
+            "control_state": {"starbase_queues": {"known": True, "by_id": {"0": {
+                "id": "0", "station_id": "0", "queue_id": "2", "owner": "0", "level": "starbase_level_starport"}}}},
+            "empire_build": {"government": {"known": True}, "traditions": {"known": False, "value": None}}}
+    granted = copy.deepcopy(base)
+    for key, value in direct.TEST_RESOURCE_GRANT.items():
+        granted["resources"][key] += value
+    assert direct._test_setup_verified("test_setup_resources", base, granted)
+    short = copy.deepcopy(granted)
+    short["resources"]["alloys"] -= 1
+    assert not direct._test_setup_verified("test_setup_resources", base, short)
+    later = copy.deepcopy(granted)
+    later["date"] = "2200.01.25"
+    assert not direct._test_setup_verified("test_setup_resources", base, later)
+    upgraded = copy.deepcopy(base)
+    upgraded["control_state"]["starbase_queues"]["by_id"]["0"]["level"] = "starbase_level_starhold"
+    assert direct._test_setup_verified("test_setup_starhold", base, upgraded)
+    moved = copy.deepcopy(upgraded)
+    moved["control_state"]["starbase_queues"]["by_id"]["0"]["queue_id"] = "9"
+    assert not direct._test_setup_verified("test_setup_starhold", base, moved)
+    assert not direct._test_setup_verified("test_setup_starhold", base, base)
+    adopted = copy.deepcopy(base)
+    adopted["empire_build"]["traditions"] = {"known": True, "value": [
+        "tr_mercantile_adopt", "tr_mercantile_adaptive_economic_policies"]}
+    assert direct._test_setup_verified("test_setup_mercantile", base, adopted)
+    partial = copy.deepcopy(base)
+    partial["empire_build"]["traditions"] = {"known": True, "value": ["tr_mercantile_adopt"]}
+    assert not direct._test_setup_verified("test_setup_mercantile", base, partial)
+    assert not direct._test_setup_verified("unknown_setup", base, adopted)

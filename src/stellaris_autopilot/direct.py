@@ -44,7 +44,17 @@ TEST_EVENT_ID = "grand_archive.2400"
 # with one AI regular empire it has none with, using the vanilla effect the
 # game's own scripts use (e.g. 00_scripted_effects.txt).
 TEST_CONTACT_ACTION = "establish_test_contact"
-TEST_ACTIONS = (TEST_EVENT_ACTION, TEST_CONTACT_ACTION)
+# Test save only, behind the same launcher flag (user-approved test setup,
+# 2026-11-15): fixed vanilla effects that prepare conditions for live tests.
+# Each is verified by its receipt and an exact postcondition.
+TEST_RESOURCES_ACTION = "test_setup_resources"
+TEST_RESOURCE_GRANT = {"energy": 3000.0, "minerals": 3000.0, "alloys": 3000.0, "food": 1000.0,
+                       "consumer_goods": 1000.0, "influence": 400.0, "unity": 3000.0}
+TEST_STARHOLD_ACTION = "test_setup_starhold"
+TEST_MERCANTILE_ACTION = "test_setup_mercantile"
+TEST_MERCANTILE_TRADITIONS = ("tr_mercantile_adopt", "tr_mercantile_adaptive_economic_policies")
+TEST_SETUP_ACTIONS = (TEST_RESOURCES_ACTION, TEST_STARHOLD_ACTION, TEST_MERCANTILE_ACTION)
+TEST_ACTIONS = (TEST_EVENT_ACTION, TEST_CONTACT_ACTION, *TEST_SETUP_ACTIONS)
 _ACTIONS = frozenset({PROBE_ACTION, HOLD_ACTION, *TEST_ACTIONS})
 ORDER_KINDS = frozenset({"fleet_wait", "fleet_orbit", "fleet_move", "fleet_stop"})
 NATIVE_ACTIONS = frozenset({"select_research", "queue_district", "queue_building", "set_paused", "queue_ship",
@@ -258,6 +268,12 @@ def render_action(config: DirectConfig, action_id: str, token: str) -> str:
     elif action_id == TEST_CONTACT_ACTION:
         orders = ("random_playable_country = { limit = { is_country_type = default is_ai = yes "
                   "NOT = { has_communications = prev } } establish_communications_no_message = prev } ")
+    elif action_id == TEST_RESOURCES_ACTION:
+        orders = "add_resource = { " + " ".join(f"{key} = {int(value)}" for key, value in TEST_RESOURCE_GRANT.items()) + " } "
+    elif action_id == TEST_STARHOLD_ACTION:
+        orders = "capital_scope = { solar_system = { starbase = { set_starbase_size = starbase_starhold } } } "
+    elif action_id == TEST_MERCANTILE_ACTION:
+        orders = "".join(f"add_tradition = {key} " for key in TEST_MERCANTILE_TRADITIONS)
     return (
         ownership_header(config)
         + "effect " + country_scoped(config.session_token, (

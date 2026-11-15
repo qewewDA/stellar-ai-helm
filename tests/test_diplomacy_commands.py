@@ -350,3 +350,9 @@ def test_recent_proposals_report_pending_accepted_and_declined_from_last_diplo_a
         {"action": "action_form_non_aggression_pact", "proposed_on": "2209.03.01",
          "status": "declined_or_expired"}]
     assert _recent() == []
+
+
+def test_a_country_without_any_contact_has_known_empty_relations():
+    # Live 2200.01.24 (4.5.2): the save omits relations_manager before first contact.
+    observed = observe_diplomacy(loads('country={ 0={ name="Us" type=default } 8={ type=swarm } }'))
+    assert observed["known"] is True and observed["by_country"] == {}

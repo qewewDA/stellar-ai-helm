@@ -101,6 +101,8 @@ def _flag(node: PDXNode, key: str) -> bool | None:
 
 def _relations(manager_owner: PDXNode, owner: str) -> dict | None:
     managers = manager_owner.get_all("relations_manager")
+    if not managers:
+        return {}  # Live 2200.01.24 (4.5.2): saves omit the block before any contact.
     if len(managers) != 1 or not isinstance(managers[0], PDXNode):
         return None
     found = {}
