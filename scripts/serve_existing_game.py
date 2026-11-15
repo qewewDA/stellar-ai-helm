@@ -72,6 +72,27 @@ def main():
             return await session.connect_game_async(retry=retry)
 
         @server.tool(annotations=writing)
+        async def session_brief() -> dict:
+            """Return a brief observation, connecting once if needed (retry=false, no automatic retry).
+
+            If already connected, reads the latest snapshot only (no extra dump). If not
+            connected, calls connect_game(retry=false): failures are returned as-is;
+            an unpaused game is not dumped. The payload uses observe_empire view=brief.
+            """
+            from stellaris_autopilot.observation_view import apply_observation_view
+            status = session.status()
+            if not (isinstance(status, dict) and (status.get("connected") is True
+                                                  or status.get("status") == "connected"
+                                                  or status.get("state") == "connected")):
+                result = await session.connect_game_async(retry=False)
+                if not (isinstance(result, dict) and (result.get("connected") is True
+                                                      or result.get("status") == "connected"
+                                                      or result.get("state") == "connected")):
+                    return result
+            observed = await asyncio.to_thread(session.observe)
+            return apply_observation_view(observed, "brief")
+
+        @server.tool(annotations=writing)
         async def checkpoint_game() -> dict:
             """Pause, verify and write a new save under save games/qs_mcp; keep the game running."""
             return await asyncio.to_thread(session.checkpoint_game)

@@ -234,3 +234,80 @@ def test_policy_and_edict_steps_need_definition_facts_and_use_the_country_comman
     for bad in ({**steps[0], "option_id": 1}, {**steps[1], "edict_id": "bad id"}, {**steps[2], "cost": "1"}):
         with pytest.raises(ValueError):
             normalize_plan([bad])
+
+
+def test_new_single_tools_are_typed_and_dispatched():
+    cases = [
+        ({"kind": "set_species_right", "species_id": "1", "right": "citizenship_full"},
+         ("species_right_command", ("set_species_right", True), {"species_id": "1", "right": "citizenship_full"})),
+        ({"kind": "queue_starbase_module", "starbase_id": "2", "slot": "1", "module_id": "shipyard"},
+         ("starbase_command", ("queue_starbase_module", True),
+          {"starbase_id": "2", "slot": "1", "type_id": "shipyard"})),
+        ({"kind": "queue_starbase_building", "starbase_id": "2", "slot": "1", "building_id": "crew_quarters"},
+         ("starbase_command", ("queue_starbase_building", True),
+          {"starbase_id": "2", "slot": "1", "type_id": "crew_quarters"})),
+        ({"kind": "recruit_army", "planet_id": "3", "army_type": "assault_army", "species_id": "1"},
+         ("army_command", ("recruit_army", True),
+          {"planet_id": "3", "army_type": "assault_army", "species_id": "1"})),
+        ({"kind": "add_system_claim", "system_id": "11"},
+         ("claim_command", ("add_system_claim",), {"system_id": "11"})),
+        ({"kind": "declare_war", "target_country_id": "66", "war_goal": "wg_conquest"},
+         ("war_command", ("declare_war",), {"target_country_id": "66", "war_goal": "wg_conquest"})),
+        ({"kind": "offer_peace", "target_country_id": "66", "terms": "status_quo", "war_id": "0"},
+         ("war_command", ("offer_peace",), {"target_country_id": "66", "terms": "status_quo", "war_id": "0"})),
+        ({"kind": "set_ship_design", "ship_id": "3", "design_id": "3057"},
+         ("ship_design_command", ("set_ship_design",), {"ship_id": "3", "design_id": "3057"})),
+    ]
+    for step, expected in cases:
+        assert normalize_plan([step])[0] == [step]
+        connection = Calls()
+        assert dispatch_step(connection, copy.deepcopy(step), lambda *_: True) == "existing-api-result"
+        assert connection.calls == [expected]
+        with pytest.raises(ValueError):
+            normalize_plan([{**step, "script": "x"}])
+
+
+def test_recruit_armies_at_starbase_step_fans_out_through_army_command():
+    step = {"kind": "recruit_armies_at_starbase", "starbase_id": "12", "army_type": "assault_army", "species_id": "1"}
+    assert normalize_plan([step])[0] == [step]
+    with pytest.raises(ValueError):
+        normalize_plan([{**step, "starbase_id": "012"}])
+
+    class Connection:
+        def __init__(self):
+            self.calls = []
+
+        def observe(self):
+            return {"state": {"ready": True}}
+
+        def army_command(self, kind, definition, **payload):
+            self.calls.append((kind, definition, payload))
+            return {"status": "command_verified"}
+
+    import stellaris_autopilot.task_plan as task_plan
+    original = task_plan.starbase_army_planets
+    task_plan.starbase_army_planets = lambda state, starbase_id: ["3", "4"]
+    try:
+        connection = Connection()
+        result = dispatch_step(connection, copy.deepcopy(step), lambda *_: True)
+    finally:
+        task_plan.starbase_army_planets = original
+    assert result["status"] == "command_verified" and result["planets"] == ["3", "4"]
+    assert connection.calls == [
+        ("recruit_army", True, {"planet_id": "3", "army_type": "assault_army", "species_id": "1", "starbase_id": "12"}),
+        ("recruit_army", True, {"planet_id": "4", "army_type": "assault_army", "species_id": "1", "starbase_id": "12"}),
+    ]
+
+
+def test_enact_planet_decision_step_uses_definition_facts():
+    step = {"kind": "enact_planet_decision", "planet_id": "1", "decision_id": "decision_day"}
+    assert normalize_plan([step])[0] == [step]
+    blocked = dispatch_step(Calls(), copy.deepcopy(step))
+    assert blocked["status"] == "blocked" and blocked["reason"].startswith("Versioned knowledge")
+    connection = Calls()
+    definition = object()
+    assert dispatch_step(connection, copy.deepcopy(step), lambda *_: definition) == "existing-api-result"
+    assert connection.calls == [("decision_command", ("enact_planet_decision", definition),
+                                 {"planet_id": "1", "decision_id": "decision_day"})]
+    with pytest.raises(ValueError):
+        normalize_plan([{**step, "planet_id": "01"}])

@@ -25,9 +25,9 @@
 ## 3. 典型流程
 
 1. `connect_game()`（游戏须已暂停）→ `attached_status()` 确认 `connected`。
-2. `observe_empire()` 读状态；需要最新数据时先 `request_observation()`。
+2. `observe_empire()` 默认返回 brief 规划视图；需要完整状态时传 `view="full"`。需要最新数据时先 `request_observation()`（同样默认 brief）。
 3. 调用玩法工具。每个写操作：本地校验 → 正常原生命令 → 游戏自带校验器 → 新存档转储比对后置条件。返回 `command_verified` 才算成功；`blocked` 带原因，未发出命令。
-4. 推进时间：`set_paused(false)` / `set_paused(true)`，或 `execute_plan` 批量执行。
+4. 推进时间：`set_paused(false)` / `set_paused(true)`，或 `execute_plan` 批量执行。`execute_plan` 的 step kind 已覆盖原先仅有单项工具的操作：`set_species_right`、`enact_planet_decision`、`queue_starbase_module`、`queue_starbase_building`、`recruit_army`、`recruit_armies_at_starbase`、`add_system_claim`、`declare_war`、`offer_peace`、`set_ship_design`（参数与单项工具相同）。外交仍用已有 `propose_*` / `close_borders` 等 kind，没有 `propose_diplomacy` kind。整批共用一次核验 dump 尚未实现（各步 verify 要求“其余状态不变”，后一步会破坏前一步的比对）。
 5. 结束：`checkpoint_game()`（检查点写入 `save games/qs_mcp`，不覆盖原存档）→ `disconnect_game(save=false)`。游戏保持运行。
 
 结果不明确的操作会留在日志中（`status()` 的 `unresolved`）；**不要换新 ID 重放**。
@@ -37,7 +37,7 @@
 | 类别 | 工具 | 状态 |
 | --- | --- | --- |
 | 连接/时间 | `connect_game` `attached_status` `checkpoint_game` `disconnect_game` `set_paused` `probe_connection` | 实机通过 |
-| 观察 | `observe_empire` `request_observation` `list_actions` `status` | 实机通过 |
+| 观察 | `observe_empire(view)` `request_observation(view)` `session_brief` `list_actions` `status` | `observe_empire`/`request_observation` 默认为 `view="brief"`（规划子集：日期、snapshot、资源、舰队/舰船、战争、宣称、建造队列、外交 pacts/proposals、暂停）；缺省字段省略，未知事实保持 `known:false`，不会改写成空列表。完整状态用 `view="full"`。`session_brief` 在未连接时会 `connect_game(retry=false)` 一次（失败不重试；未暂停不 dump），已连接则只读最新快照。 |
 | 研究/建设 | `select_research` `queue_district` `queue_building` `upgrade_building` `demolish_building` `convert_zone` `cancel_construction` `move_queue_item` | 见 direct-control.md |
 | 造舰/舰队 | `queue_ship` `queue_colony_ship` `issue_order` `survey_planet` `build_station` `colonize_planet` `set_fleet_stance` | 见 direct-control.md；`fleet_wait` 本轮复测通过 |
 | 政策/法令 | `list_policies` `set_policy` `activate_edict` `deactivate_edict` | `set_policy`（贸易政策）实机通过 |

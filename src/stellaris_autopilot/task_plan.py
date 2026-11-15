@@ -18,6 +18,14 @@ from .control_commands import control_request
 from .country_commands import country_request
 from .event_commands import event_request
 from .diplomacy_commands import DIPLOMACY_KINDS, diplomacy_request
+from .decision_commands import decision_request
+from .species_rights_commands import species_right_request
+from .starbase_commands import starbase_request
+from .army_commands import army_request, starbase_army_planets
+from .claim_commands import claim_request
+from .war_commands import war_request
+from .ship_design_commands import ship_design_request
+from .ship_commands import _id
 
 
 class _Step(BaseModel):
@@ -161,11 +169,78 @@ class PauseStep(_Step):
     paused: StrictBool
 
 
+class SpeciesRightStep(_Step):
+    kind: Literal["set_species_right"]
+    species_id: StrictStr
+    right: StrictStr
+
+
+class PlanetDecisionStep(_Step):
+    kind: Literal["enact_planet_decision"]
+    planet_id: StrictStr
+    decision_id: StrictStr
+
+
+class StarbaseModuleStep(_Step):
+    kind: Literal["queue_starbase_module"]
+    starbase_id: StrictStr
+    slot: StrictStr
+    module_id: StrictStr
+
+
+class StarbaseBuildingStep(_Step):
+    kind: Literal["queue_starbase_building"]
+    starbase_id: StrictStr
+    slot: StrictStr
+    building_id: StrictStr
+
+
+class RecruitArmyStep(_Step):
+    kind: Literal["recruit_army"]
+    planet_id: StrictStr
+    army_type: StrictStr
+    species_id: StrictStr
+
+
+class RecruitArmiesAtStarbaseStep(_Step):
+    kind: Literal["recruit_armies_at_starbase"]
+    starbase_id: StrictStr
+    army_type: StrictStr
+    species_id: StrictStr
+
+
+class ClaimStep(_Step):
+    kind: Literal["add_system_claim"]
+    system_id: StrictStr
+
+
+class DeclareWarStep(_Step):
+    kind: Literal["declare_war"]
+    target_country_id: StrictStr
+    war_goal: StrictStr
+
+
+class OfferPeaceStep(_Step):
+    kind: Literal["offer_peace"]
+    target_country_id: StrictStr
+    terms: Literal["status_quo", "surrender", "demand_surrender"]
+    war_id: StrictStr
+
+
+class ShipDesignStep(_Step):
+    kind: Literal["set_ship_design"]
+    ship_id: StrictStr
+    design_id: StrictStr
+
+
 PlanStep = Annotated[
     ResearchStep | DistrictStep | BuildingStep | ShipStep | ColonyShipStep | UpgradeStep
     | DemolishStep | ConvertStep | CancelConstructionStep | FleetTargetStep | StationStep
     | FleetMoveStep | FleetWaitStep | FleetStopStep | FleetStanceStep | QueueMoveStep
-    | DefensePlatformStep | EventOptionStep | BordersStep | PolicyStep | EdictStep | PauseStep,
+    | DefensePlatformStep | EventOptionStep | BordersStep | PolicyStep | EdictStep | PauseStep
+    | SpeciesRightStep | PlanetDecisionStep | StarbaseModuleStep | StarbaseBuildingStep
+    | RecruitArmyStep | RecruitArmiesAtStarbaseStep | ClaimStep | DeclareWarStep
+    | OfferPeaceStep | ShipDesignStep,
     Field(discriminator="kind"),
 ]
 PlanSteps = Annotated[list[PlanStep], Field(min_length=1, max_length=20)]
@@ -182,6 +257,29 @@ def request_identifier(value: str) -> str:
 def _no_definitions(kind: str, category: str, object_id: str):
     return {"status": "blocked", "reason": "Versioned knowledge is not attached; exact definition facts are "
                                            "required before a policy or edict step is submitted"}
+
+
+
+def _dispatch_recruit_armies_at_starbase(connection, starbase_id, army_type, species_id):
+    observed = connection.observe()
+    state = observed.get("state") if isinstance(observed, dict) else None
+    if not isinstance(state, dict):
+        return {"status": "blocked", "reason": "No current observation"}
+    try:
+        planets = starbase_army_planets(state, starbase_id)
+    except ValueError as error:
+        return {"status": "blocked", "reason": str(error)}
+    if not planets:
+        return {"status": "blocked", "reason": "No owned planet with an idle army queue in that starbase's system"}
+    receipts = []
+    for planet_id in planets:
+        result = connection.army_command("recruit_army", True, planet_id=planet_id,
+                                         army_type=army_type, species_id=species_id, starbase_id=starbase_id)
+        receipts.append({"planet_id": planet_id, "result": result})
+        if not isinstance(result, dict) or result.get("status") != "command_verified":
+            return {"status": "partial" if len(receipts) > 1 else (result or {}).get("status", "blocked"),
+                    "planets": planets, "receipts": receipts}
+    return {"status": "command_verified", "planets": planets, "receipts": receipts}
 
 
 def dispatch_step(connection, step: dict, definitions=None):
@@ -208,6 +306,56 @@ def dispatch_step(connection, step: dict, definitions=None):
         return connection.event_command(kind, **args)
     if kind in DIPLOMACY_KINDS:
         return connection.diplomacy_command(kind, **args)
+    if kind == "set_species_right":
+        species_right_request(kind, True, **args)
+        checked = (definitions or _no_definitions)(kind, "species_rights", args["right"])
+        if isinstance(checked, dict):
+            return checked
+        if checked is None:
+            return None
+        return connection.species_right_command(kind, True, **args)
+    if kind == "enact_planet_decision":
+        _id(args["planet_id"])
+        checked = (definitions or _no_definitions)(kind, "decisions", args["decision_id"])
+        if isinstance(checked, dict):
+            return checked
+        if checked is None:
+            return None
+        return connection.decision_command(kind, checked, **args)
+    if kind in {"queue_starbase_module", "queue_starbase_building"}:
+        type_key = "module_id" if kind == "queue_starbase_module" else "building_id"
+        category = "starbase_modules" if kind == "queue_starbase_module" else "starbase_buildings"
+        starbase_request(kind, True, starbase_id=args["starbase_id"], slot=args["slot"], type_id=args[type_key])
+        checked = (definitions or _no_definitions)(kind, category, args[type_key])
+        if isinstance(checked, dict):
+            return checked
+        if checked is None:
+            return None
+        return connection.starbase_command(kind, True, starbase_id=args["starbase_id"], slot=args["slot"],
+                                           type_id=args[type_key])
+    if kind == "recruit_army":
+        army_request(kind, True, **args)
+        checked = (definitions or _no_definitions)(kind, "armies", args["army_type"])
+        if isinstance(checked, dict):
+            return checked
+        if checked is None:
+            return None
+        return connection.army_command(kind, True, **args)
+    if kind == "recruit_armies_at_starbase":
+        army_request("recruit_army", True, planet_id="1", army_type=args["army_type"], species_id=args["species_id"])
+        _id(args["starbase_id"])
+        checked = (definitions or _no_definitions)(kind, "armies", args["army_type"])
+        if isinstance(checked, dict):
+            return checked
+        if checked is None:
+            return None
+        return _dispatch_recruit_armies_at_starbase(connection, **args)
+    if kind == "add_system_claim":
+        return connection.claim_command(kind, **args)
+    if kind in {"declare_war", "offer_peace"}:
+        return connection.war_command(kind, **args)
+    if kind == "set_ship_design":
+        return connection.ship_design_command(kind, **args)
     if kind.startswith("fleet_"):
         return connection.issue_order(step)
     if kind in {"survey_planet", "colonize_planet", "build_station"}:
@@ -237,6 +385,13 @@ class _Validate:
     country_command = staticmethod(country_request)
     event_command = staticmethod(event_request)
     diplomacy_command = staticmethod(diplomacy_request)
+    decision_command = staticmethod(decision_request)
+    species_right_command = staticmethod(species_right_request)
+    starbase_command = staticmethod(starbase_request)
+    army_command = staticmethod(army_request)
+    claim_command = staticmethod(claim_request)
+    war_command = staticmethod(war_request)
+    ship_design_command = staticmethod(ship_design_request)
     select_research = staticmethod(research_selection)
     queue_district = staticmethod(district_request)
     queue_building = staticmethod(building_request)

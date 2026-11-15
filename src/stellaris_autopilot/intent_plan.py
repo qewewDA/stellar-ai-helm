@@ -89,6 +89,15 @@ def _definitions(knowledge) -> Callable:
     def lookup(kind, category, object_id):
         if knowledge is None:
             return None
+        if kind == "enact_planet_decision":
+            from .decision_commands import decision_definition
+            return decision_definition(knowledge.lookup("decisions", object_id, ["owned_planets_only", "resources"]))
+        if kind in {"set_species_right", "queue_starbase_module", "queue_starbase_building",
+                    "recruit_army", "recruit_armies_at_starbase"}:
+            found = knowledge.lookup(category, object_id, [])
+            if not isinstance(found, dict) or found.get("status") != "found":
+                return {"status": "blocked", "reason": "The type was not found in versioned game knowledge"}
+            return True
         return definition_from_record(kind, knowledge.lookup(category, object_id, ["option", "resources"]))
     return lookup
 
@@ -100,6 +109,13 @@ def _knowledge_problems(step: dict, knowledge) -> list[str]:
         "queue_building": [("buildings", step.get("building_id"))],
         "upgrade_building": [("buildings", step.get("target_building_id"))],
         "convert_zone": [("zones", step.get("target_zone_id"))],
+        "set_species_right": [("species_rights", step.get("right"))],
+        "enact_planet_decision": [("decisions", step.get("decision_id"))],
+        "queue_starbase_module": [("starbase_modules", step.get("module_id"))],
+        "queue_starbase_building": [("starbase_buildings", step.get("building_id"))],
+        "recruit_army": [("armies", step.get("army_type"))],
+        "recruit_armies_at_starbase": [("armies", step.get("army_type"))],
+        "set_ship_design": [],
     }.get(step["kind"], [])
     problems = []
     for category, object_id in checks:

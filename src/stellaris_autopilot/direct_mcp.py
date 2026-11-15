@@ -62,6 +62,7 @@ from .extended_native import REQUEST_TYPES, RESOLVED_TYPES, resolve_extended, ve
 from .assistant_prompts import register_prompts
 from .action_context import current_plan_context, verified_context
 from .task_plan import PlanSteps
+from .observation_view import apply_observation_view, observation_view
 from .task_workflow import TaskWorkflow
 from .completion_goal import CompletionIntent, TimeAuthorization
 from .completion_workflow import CompletionWorkflow
@@ -950,14 +951,27 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         return knowledge().status()
 
     @server.tool(annotations=readonly)
-    async def observe_empire() -> dict:
-        """Read the latest existing direct snapshot and its freshness; never publish a command."""
-        return await call_write(connection.observe)
+    async def observe_empire(view: Literal["brief", "full"] = "brief") -> dict:
+        """Read the latest existing snapshot; never publish a command.
+
+        view='brief' (default) returns a planning subset: date, snapshot,
+        resources, fleets/ships, wars, claims, construction, diplomacy
+        pacts/proposals, pause, and compact control queues. Missing keys are
+        omitted; unknown facts stay marked unknown (never rewritten as empty
+        lists). view='full' returns the complete observation.
+        """
+        observed = await call_write(connection.observe)
+        return apply_observation_view(observed, observation_view(view))
 
     @server.tool(annotations=writing)
-    async def request_observation() -> dict:
-        """Ask the running game for a fresh dump, then validate its empire, build and session."""
-        return await call_write(connection.request_observation)
+    async def request_observation(view: Literal["brief", "full"] = "brief") -> dict:
+        """Ask the running game for a fresh dump, then validate its empire, build and session.
+
+        The dump itself is unchanged; view filters the returned payload like
+        observe_empire (default brief).
+        """
+        observed = await call_write(connection.request_observation)
+        return apply_observation_view(observed, observation_view(view))
 
     @server.tool(annotations=writing)
     async def probe_connection() -> dict:
@@ -1106,6 +1120,16 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
 
     def country_definition(kind: str, category: str, object_id: str):
         try:
+            if kind == "enact_planet_decision":
+                return decision_definition(knowledge().lookup("decisions", object_id, ["owned_planets_only", "resources"]))
+            if kind in {"set_policy", "activate_edict"}:
+                return definition_from_record(kind, knowledge().lookup(category, object_id, ["option", "resources"]))
+            if kind in {"set_species_right", "queue_starbase_module", "queue_starbase_building",
+                        "recruit_army", "recruit_armies_at_starbase"}:
+                found = knowledge().lookup(category, object_id, [])
+                if not isinstance(found, dict) or found.get("status") != "found":
+                    return {"status": "blocked", "reason": "The type was not found in versioned game knowledge"}
+                return True
             return definition_from_record(kind, knowledge().lookup(category, object_id, ["option", "resources"]))
         except ValueError as error:
             return {"status": "blocked", "reason": "Exact definition facts are required before submission: " + str(error)}
@@ -1117,7 +1141,7 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         Read-only. Options needing a tradition we lack are rejected by the game's
         validator in set_policy (e.g. every trade_policy option but the default).
         """
-        observed = await observe_empire()
+        observed = await observe_empire(view="full")
         state = observed.get("state") if isinstance(observed, dict) else None
         if not isinstance(state, dict):
             return {"status": "blocked", "reason": "No current observation"}
@@ -1283,7 +1307,7 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         Read-only. Potential/allow and cooldowns need runtime evaluation; the
         game's validator decides in set_species_right.
         """
-        observed = await observe_empire()
+        observed = await observe_empire(view="full")
         state = observed.get("state") if isinstance(observed, dict) else None
         if not isinstance(state, dict):
             return {"status": "blocked", "reason": "No current observation"}
