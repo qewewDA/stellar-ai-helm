@@ -310,3 +310,27 @@ def test_size_factor_must_be_shared_by_every_cost_key():
     assert cc.edict_cost_matches({"energy": 20.0, "unity": 5.0}, definition) is False
     assert cc.edict_cost_matches({"unity": 5.0}, definition) is False
     assert cc.edict_cost_matches({"energy": 0.0, "unity": 0.0}, definition) is False
+
+
+TRADE_POLICY = {"status": "found", "definition": {"option": [
+    {"name": "trade_policy_default", "potential": {"is_worker_coop_empire": "no"}},
+    {"name": "trade_policy_consumer_goods", "potential": {
+        "OR": {"has_federation": "no"}, "has_tradition": "tr_mercantile_adaptive_economic_policies",
+        "is_worker_coop_empire": "no"}},
+    {"name": "trade_policy_other", "potential": {"NOT": {"has_tradition": "tr_x"}}},
+]}}
+
+
+def test_trade_policy_options_list_their_required_traditions():
+    from stellaris_autopilot.country_commands import list_policies, policy_options
+    assert policy_options(TRADE_POLICY) == [
+        {"option": "trade_policy_default", "requires_traditions": []},
+        {"option": "trade_policy_consumer_goods", "requires_traditions": ["tr_mercantile_adaptive_economic_policies"]},
+        {"option": "trade_policy_other", "requires_traditions": []}]
+    state = {"date": "2211.01.25", "country_controls": {"known": True, "policies": {
+        "trade_policy": {"selected": "trade_policy_default", "date": None}}, "edicts": {}}}
+    listed = list_policies(state, {"trade_policy": TRADE_POLICY})
+    assert listed["status"] == "listed"
+    assert listed["policies"][0]["policy"] == "trade_policy" and listed["policies"][0]["cooldown_elapsed"] is True
+    assert listed["policies"][0]["options"][1]["requires_traditions"] == ["tr_mercantile_adaptive_economic_policies"]
+    assert list_policies({"country_controls": {"known": False}}, {})["status"] == "blocked"

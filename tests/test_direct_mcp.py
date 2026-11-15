@@ -97,7 +97,7 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "issue_order", "select_research", "queue_district", "queue_building", "set_paused", "list_actions", "status", "stop_bridge",
                           "queue_ship", "upgrade_building", "demolish_building", "convert_zone", "cancel_construction",
                           "survey_planet", "build_station", "colonize_planet", "queue_colony_ship",
-                          "set_policy", "activate_edict", "deactivate_edict",
+                          "list_policies", "set_policy", "activate_edict", "deactivate_edict",
                           "set_fleet_stance", "move_queue_item", "queue_defense_platform",
                           "list_pending_events", "choose_event_option",
                           "list_diplomacy", "close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
@@ -111,6 +111,7 @@ def test_tool_contract_separates_observation_from_writes(config_path):
     assert tools["list_planet_decisions"].annotations.readOnlyHint is True
     assert tools["enact_planet_decision"].annotations.readOnlyHint is False
     assert tools["list_species_rights"].annotations.readOnlyHint is True
+    assert tools["list_policies"].annotations.readOnlyHint is True
     assert tools["set_species_right"].annotations.readOnlyHint is False
     assert tools["choose_event_option"].annotations.readOnlyHint is False
     assert set(tools["choose_event_option"].inputSchema["properties"]) == {"player_event_id", "option_index"}

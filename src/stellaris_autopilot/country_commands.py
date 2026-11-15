@@ -136,6 +136,55 @@ def definition_from_record(kind: str, record: dict) -> CountryDefinition:
     raise ValueError("Unsupported country command")
 
 
+def _required_traditions(clause) -> list:
+    """``has_tradition`` keys a trigger block requires outright (not under NOT/OR/NOR)."""
+    found = []
+    if isinstance(clause, list):
+        for item in clause:
+            found += _required_traditions(item)
+    elif isinstance(clause, dict):
+        for key, value in clause.items():
+            if key == "has_tradition":
+                values = value if isinstance(value, list) else [value]
+                found += [item for item in values if isinstance(item, str)]
+            elif key in {"AND", "potential", "allow"}:
+                found += _required_traditions(value)
+    return found
+
+
+def policy_options(record: dict) -> list:
+    """Options of one policy with the traditions each requires (read-only listing).
+
+    Live 2026-11-14: every trade_policy option except trade_policy_default
+    requires tr_mercantile_adaptive_economic_policies; the game's validator
+    rejected trade_policy_consumer_goods without it.
+    """
+    definition = record.get("definition") if isinstance(record, dict) else None
+    options = definition.get("option") if isinstance(definition, dict) else None
+    options = [options] if isinstance(options, dict) else options if isinstance(options, list) else []
+    listed = []
+    for option in options:
+        if not isinstance(option, dict) or not isinstance(option.get("name"), str):
+            continue
+        required = _required_traditions({"potential": option.get("potential"), "allow": option.get("allow")})
+        listed.append({"option": option["name"], "requires_traditions": sorted(set(required))})
+    return listed
+
+
+def list_policies(state: dict, records: dict) -> dict:
+    """Observed active policies, their cooldown and known options (records keyed by policy id)."""
+    controls = state.get("country_controls") if isinstance(state, dict) else None
+    if not isinstance(controls, dict) or controls.get("known") is not True:
+        return {"status": "blocked", "reason": "Active policies are not exactly observable in this snapshot"}
+    now = _date(state.get("date"))
+    policies = []
+    for policy, entry in sorted(controls.get("policies", {}).items()):
+        policies.append({"policy": policy, "selected": entry.get("selected"), "changed_on": entry.get("date"),
+                         "cooldown_elapsed": policy_cooldown_elapsed(entry, now) if now is not None else None,
+                         "options": policy_options(records.get(policy))})
+    return {"status": "listed", "policies": policies}
+
+
 @dataclass(frozen=True)
 class CountryRequest:
     kind: str

@@ -42,7 +42,7 @@ from .knowledge import GameKnowledge
 from .ship_commands import ship_request
 from .colony_ships import colony_ship_request
 from .planet_commands import planet_request
-from .country_commands import country_request, definition_from_record
+from .country_commands import country_request, definition_from_record, list_policies as policy_listing
 from .control_commands import control_request
 from .diplomacy_commands import PROPOSALS, ResolvedDiplomacyCommand, diplomacy_request, proposal_outcome
 from .species_rights_commands import CATEGORIES as SPECIES_RIGHT_CATEGORIES, category_of, species_right_request
@@ -1035,6 +1035,24 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
             return definition_from_record(kind, knowledge().lookup(category, object_id, ["option", "resources"]))
         except ValueError as error:
             return {"status": "blocked", "reason": "Exact definition facts are required before submission: " + str(error)}
+
+    @server.tool(annotations=readonly)
+    async def list_policies() -> dict:
+        """List our active policies with selection, cooldown and each option's required traditions.
+
+        Read-only. Options needing a tradition we lack are rejected by the game's
+        validator in set_policy (e.g. every trade_policy option but the default).
+        """
+        observed = await observe_empire()
+        state = observed.get("state") if isinstance(observed, dict) else None
+        if not isinstance(state, dict):
+            return {"status": "blocked", "reason": "No current observation"}
+        try:
+            bundle = knowledge().bundle["records"]
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return {"status": "blocked", "reason": "Versioned knowledge with policies is required"}
+        records = {key.split(":", 1)[1]: record for key, record in bundle.items() if key.startswith("policies:")}
+        return {**policy_listing(state, records), "snapshot": observed.get("snapshot"), "date": state.get("date")}
 
     @server.tool(annotations=writing)
     async def set_policy(policy_id: str, option_id: str) -> dict:
