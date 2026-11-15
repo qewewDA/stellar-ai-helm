@@ -346,6 +346,8 @@ function consumePending(source = 'run') {
                     : (request.kind === 'queue_starbase_module' || request.kind === 'queue_starbase_building') ? prepareStarbaseCommand(request)
                     : request.kind === 'recruit_army' ? prepareArmyCommand(request)
                     : request.kind === 'add_system_claim' ? prepareClaimCommand(request)
+                    : (request.kind === 'declare_war' || request.kind === 'offer_peace') ? prepareWarCommand(request)
+                    : request.kind === 'set_ship_design' ? prepareShipDesignCommand(request)
                     : ['upgrade_building', 'demolish_building', 'convert_zone', 'cancel_construction'].includes(request.kind)
                     ? preparePlanetCommand(request) : prepareFleetCommand(request);
                 command = prepared.command;
@@ -536,7 +538,9 @@ rpc.exports = {
                 || (typeof canonicalSpeciesRightRequest === 'function' ? canonicalSpeciesRightRequest(request) : null)
                 || (typeof canonicalStarbaseRequest === 'function' ? canonicalStarbaseRequest(request) : null)
                 || (typeof canonicalArmyRequest === 'function' ? canonicalArmyRequest(request) : null)
-                || (typeof canonicalClaimRequest === 'function' ? canonicalClaimRequest(request) : null);
+                || (typeof canonicalClaimRequest === 'function' ? canonicalClaimRequest(request) : null)
+                || (typeof canonicalWarRequest === 'function' ? canonicalWarRequest(request) : null)
+                || (typeof canonicalShipDesignRequest === 'function' ? canonicalShipDesignRequest(request) : null);
             if (canonical === null) throw new Error('Unknown native kind or malformed typed payload');
         }
         if (states.has(request.token)) {

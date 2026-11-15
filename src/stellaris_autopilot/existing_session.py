@@ -19,6 +19,7 @@ _METHODS = frozenset({
     "queue_district", "queue_building", "set_paused", "queue_ship", "queue_colony_ship",
     "planet_command", "fleet_command", "country_command", "control_command", "event_command",
     "diplomacy_command", "decision_command", "species_right_command", "starbase_command", "army_command", "claim_command",
+    "war_command", "ship_design_command",
 })
 
 

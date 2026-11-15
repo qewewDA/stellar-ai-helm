@@ -27,15 +27,19 @@ from .army_commands import (ArmyRequest, ResolvedArmyCommand, resolve_army_comma
                             native_army_payload)
 from .claim_commands import (ClaimRequest, ResolvedClaimCommand, resolve_claim_command, verify_claim_command,
                              native_claim_payload)
+from .war_commands import (WarRequest, ResolvedWarCommand, resolve_war_command, verify_war_command,
+                           native_war_payload)
+from .ship_design_commands import (ShipDesignRequest, ResolvedShipDesignCommand, resolve_ship_design_command,
+                                   verify_ship_design_command, native_ship_design_payload)
 
 
 REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest, ControlRequest,
                  EventRequest, DiplomacyRequest, DecisionRequest, SpeciesRightRequest,
-                 StarbaseRequest, ArmyRequest, ClaimRequest)
+                 StarbaseRequest, ArmyRequest, ClaimRequest, WarRequest, ShipDesignRequest)
 RESOLVED_TYPES = (ShipConstruction, ResolvedPlanetCommand, FleetOperation, ColonyShipConstruction,
                   ResolvedCountryCommand, ResolvedControlCommand, ResolvedEventCommand, ResolvedDiplomacyCommand,
                   ResolvedDecisionCommand, ResolvedSpeciesRightCommand, ResolvedStarbaseCommand,
-                  ResolvedArmyCommand, ResolvedClaimCommand)
+                  ResolvedArmyCommand, ResolvedClaimCommand, ResolvedWarCommand, ResolvedShipDesignCommand)
 
 
 def resolve_extended(state, request):
@@ -65,6 +69,10 @@ def resolve_extended(state, request):
         return resolve_army_command(state, request)
     if isinstance(request, ClaimRequest):
         return resolve_claim_command(state, request)
+    if isinstance(request, WarRequest):
+        return resolve_war_command(state, request)
+    if isinstance(request, ShipDesignRequest):
+        return resolve_ship_design_command(state, request)
     raise ValueError("Unsupported extended native request")
 
 
@@ -95,6 +103,10 @@ def verify_extended(before, after, command):
         return verify_army_command(before, after, command)
     if isinstance(command, ResolvedClaimCommand):
         return verify_claim_command(before, after, command)
+    if isinstance(command, ResolvedWarCommand):
+        return verify_war_command(before, after, command)
+    if isinstance(command, ResolvedShipDesignCommand):
+        return verify_ship_design_command(before, after, command)
     return False
 
 
@@ -133,4 +145,8 @@ def extended_payload(command, token):
         return native_army_payload(command, token)
     if isinstance(command, ResolvedClaimCommand):
         return native_claim_payload(command, token)
+    if isinstance(command, ResolvedWarCommand):
+        return native_war_payload(command, token)
+    if isinstance(command, ResolvedShipDesignCommand):
+        return native_ship_design_payload(command, token)
     raise ValueError("Unsupported resolved native command")

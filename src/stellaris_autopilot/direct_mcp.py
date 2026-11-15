@@ -49,6 +49,8 @@ from .diplomacy_commands import PROPOSALS, ResolvedDiplomacyCommand, diplomacy_r
 from .starbase_commands import starbase_request
 from .army_commands import army_request, starbase_army_planets
 from .claim_commands import claim_request
+from .war_commands import war_request
+from .ship_design_commands import ship_design_request
 from .species_rights_commands import CATEGORIES as SPECIES_RIGHT_CATEGORIES, category_of, species_right_request
 from .decision_commands import (ResolvedDecisionCommand, decision_definition, decision_outcome, decision_request,
                                 list_planet_decisions as planet_decision_listing)
@@ -440,6 +442,12 @@ class DirectConnection:
 
     def claim_command(self, kind: str, **payload) -> dict:
         return self._extended(claim_request(kind, **payload))
+
+    def war_command(self, kind: str, **payload) -> dict:
+        return self._extended(war_request(kind, **payload))
+
+    def ship_design_command(self, kind: str, **payload) -> dict:
+        return self._extended(ship_design_request(kind, **payload))
 
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
@@ -1406,6 +1414,71 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         return await call_write(connection.claim_command, "add_system_claim", system_id=system_id)
 
     @server.tool(annotations=readonly)
+    async def list_wars() -> dict:
+        """List wars we participate in, with sides and the attacker war goal.
+
+        Reads the latest snapshot only; never publishes a command. Use
+        request_observation first for a fresh dump. War ids are the save handles.
+        """
+        observed = await call_write(connection.observe)
+        state = observed.get("state") if isinstance(observed, dict) else None
+        wars = state.get("wars") if isinstance(state, dict) else None
+        if not isinstance(wars, dict) or wars.get("known") is not True:
+            return {"status": "blocked", "reason": "Our wars are not exactly observable in this snapshot"}
+        return {"status": "observed", "snapshot": observed.get("snapshot"), "date": state.get("date"),
+                "wars": list((wars.get("by_id") or {}).values())}
+
+    @server.tool(annotations=writing)
+    async def declare_war(target_country_id: str, war_goal: str) -> dict:
+        """Declare war on one country with one war goal (for example wg_conquest or wg_humiliation).
+
+        Requires a casus belli the game already recognizes (claims for
+        wg_conquest, rivalry for wg_humiliation). The command is the normal
+        auto-accepted action_declare_war; verified as a new war with us as
+        attacker, that country as defender, and that goal.
+        """
+        return await call_write(connection.war_command, "declare_war",
+                                target_country_id=target_country_id, war_goal=war_goal)
+
+    @server.tool(annotations=writing)
+    async def offer_peace(target_country_id: str, terms: str, war_id: str) -> dict:
+        """Offer peace in one ongoing war: status_quo, surrender, or demand_surrender.
+
+        This is a proposal the other side can accept or refuse. war_id comes
+        from list_wars. Verified as exactly one new pending action_offer_peace;
+        the war itself stays until they accept.
+        """
+        return await call_write(connection.war_command, "offer_peace",
+                                target_country_id=target_country_id, terms=terms, war_id=war_id)
+
+    @server.tool(annotations=readonly)
+    async def list_ships() -> dict:
+        """List our ships with current design and any pending upgrade.
+
+        Reads the latest snapshot only; never publishes a command. Design ids
+        match shipbuilding.designs_by_id from observe_empire.
+        """
+        observed = await call_write(connection.observe)
+        state = observed.get("state") if isinstance(observed, dict) else None
+        ships = state.get("ships") if isinstance(state, dict) else None
+        if not isinstance(ships, dict) or ships.get("known") is not True:
+            return {"status": "blocked", "reason": "Our ships are not exactly observable in this snapshot"}
+        return {"status": "observed", "snapshot": observed.get("snapshot"), "date": state.get("date"),
+                "ships": list((ships.get("by_id") or {}).values())}
+
+    @server.tool(annotations=writing)
+    async def set_ship_design(ship_id: str, design_id: str) -> dict:
+        """Set one owned ship to one design from our current collection.
+
+        The design must differ from the ship's current design (and from an
+        already-pending upgrade of that same design). The game's validator
+        decides whether that size and design can be applied. Verified as that
+        ship now using the requested design; optional refit resources may fall.
+        """
+        return await call_write(connection.ship_design_command, "set_ship_design",
+                                ship_id=ship_id, design_id=design_id)
+
+    @server.tool(annotations=readonly)
     async def list_diplomacy() -> dict:
         """List our side of every known relation: contact, communications, hostility and border state.
 
@@ -1574,6 +1647,9 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "queue_starbase_module": "Queue one starbase module in a free slot with normal payment",
                                     "queue_starbase_building": "Queue one starbase building in a free slot with normal payment",
                                     "add_system_claim": "Claim one system owned by another empire (paid in influence)",
+                                    "declare_war": "Declare war on one country with a named war goal such as wg_conquest",
+                                    "offer_peace": "Offer status_quo, surrender or demand_surrender in an ongoing war",
+                                    "set_ship_design": "Set one owned ship to one design from our collection",
                                     "recruit_army": "Recruit one army on an owned planet (or all planets of a starbase's system)",
                                     "set_fleet_stance": "Set one owned fleet's passive/aggressive/evasive stance normally",
                                     "move_queue_item": "Move one owned construction item one place up or down in its queue",

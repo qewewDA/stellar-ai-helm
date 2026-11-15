@@ -104,6 +104,7 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "harm_relations", "improve_relations", "propose_diplomacy",
                           "list_planet_decisions", "enact_planet_decision", "list_species_rights", "set_species_right",
                           "queue_starbase_module", "queue_starbase_building", "recruit_army", "recruit_armies_at_starbase", "add_system_claim",
+                          "list_wars", "declare_war", "offer_peace", "list_ships", "set_ship_design",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
                           "plan_intent",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}

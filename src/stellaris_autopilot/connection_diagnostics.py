@@ -22,6 +22,7 @@ _ACTION_KINDS = frozenset({
     "choose_event_option", "close_borders", "open_borders", "insult", "make_rival", "end_rivalry", "recall_embassy",
     "harm_relations", "improve_relations", "propose_embassy", "propose_non_aggression_pact",
     "propose_research_agreement", "propose_commercial_pact", "propose_migration_pact", "enact_planet_decision", "set_species_right", "queue_starbase_module", "queue_starbase_building", "recruit_army", "add_system_claim",
+    "declare_war", "offer_peace", "set_ship_design",
 })
 
 
