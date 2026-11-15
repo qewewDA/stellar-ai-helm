@@ -45,6 +45,7 @@
 | 星球决议 | `list_planet_decisions` `enact_planet_decision` | 见 direct-control.md |
 | 恒星基地 | `queue_starbase_module` `queue_starbase_building` `queue_defense_platform` | 模块/建筑实机通过（需空槽位） |
 | 陆军 | `recruit_army`（单星球，一次一支，队列非空即拒绝）`recruit_armies_at_starbase`（该星系每个空闲己方星球各一支，完工后集结到该恒星基地） | 两条路径实机通过；多星球扇出仅离线测试 |
+| 宣称 | `add_system_claim`（一次 +1 宣称，消耗影响力；`state.claims.by_system` 读取） | 实机通过（对宿敌首都星系 596 叠到 2 层） |
 | 事件 | `list_pending_events` `choose_event_option` | 实机通过（不处理 AI 国家事件） |
 | 外交 | `list_diplomacy`（含 `pacts`、`our_proposals`、`recent_proposals`） | 实机通过 |
 | 外交（单方面） | `close_borders` `open_borders` `insult` `make_rival` `recall_embassy` `improve_relations` `harm_relations` | `make_rival`、`recall_embassy`、派遣使节实机通过 |
@@ -54,5 +55,5 @@
 
 - **互不侵犯条约**：脚本条件（信任 50、使馆）都满足，仍被游戏引擎内部的硬编码检查拒绝，且不返回原因文本（校验函数 0x9bd040 中无提示的关系位/国家检查）。原因未定位，暂不可用。
 - **结束宿敌** `end_rivalry`：游戏规定宿敌宣布后 10 年内不能结束（测试局为 2210.01.24 前），未实机验证。
-- **未实现**：宣战/和平/宣称、联邦与附庸、星区管理、领袖招募与任命、舰船设计选择。
+- **未实现**：宣战/和平（宣称已可用）、联邦与附庸、星区管理、领袖招募与任命、舰船设计选择。
 - 宏观国策仍由使用者决定；本项目不会切换到游戏原生 AI 托管。
