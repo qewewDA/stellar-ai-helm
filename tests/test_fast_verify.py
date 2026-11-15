@@ -487,7 +487,8 @@ def test_connect_and_checkpoint_parse_counts(tmp_path):
     runtime = AttachedRuntime(Process(), native, user, tmp_path / "state", "c" * 32)
     try:
         runtime.initialize()
-        # Identity gate: targeted; backup: one full parse; bound session: one full parse.
+        # Identity+backup reuse the on-disk dump (targeted + one full parse);
+        # the bound session still requests one fresh full parse after events.
         connect = parse_stats()
         assert connect.get("targeted_parse") == 1 and connect.get("full_parse") == 2
         assert runtime.initial_summary["planet_count"] == 1
@@ -500,7 +501,9 @@ def test_connect_and_checkpoint_parse_counts(tmp_path):
         # packaging reuses that verified tree. Every step still read a new dump.
         checkpoint = parse_stats()
         assert checkpoint.get("full_parse") == 1 and checkpoint.get("root_cache_hit") == 1
-        assert native.dumps >= 3 + 3
+        # Connect issues one post-event dump (the pre-existing dump is reused);
+        # checkpoint still issues its own dumps.
+        assert native.dumps >= 1 + 3
     finally:
         runtime.close()
     assert observe_module._ROOT_CACHE == {} and observe_module._STATE_CACHE == {}

@@ -207,7 +207,7 @@ def test_mcp_schema_exposes_typed_short_plan_and_offline_annotations(config_path
     schema = tools["execute_plan"].inputSchema
     assert schema["properties"]["steps"]["maxItems"] == 20
     assert schema["properties"]["steps"]["items"]["discriminator"]["propertyName"] == "kind"
-    assert set(schema["properties"]) == {"request_id", "steps", "expected_snapshot"}
+    assert set(schema["properties"]) == {"request_id", "steps", "expected_snapshot", "verify"}
     assert tools["execute_plan"].annotations.idempotentHint is True
     assert tools["task_result"].annotations.readOnlyHint is True
     assert tools["cancel_task"].annotations.idempotentHint is True

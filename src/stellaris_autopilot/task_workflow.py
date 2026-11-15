@@ -12,6 +12,7 @@ from .task_store import TaskStore
 
 _VERIFIED = frozenset({
     "command_verified", "pause_verified", "construction_verified", "research_verified", "order_verified",
+    "command_accepted",
 })
 
 
@@ -48,8 +49,10 @@ class TaskWorkflow:
                           else dispatch_step(connection, step, self.definitions))
                 status = result.get("status") if isinstance(result, dict) else None
                 if status in _VERIFIED:
-                    self.store.step_result(request_id, index, "verified", result)
-                    guard["expected_snapshot"] = result["snapshot"]
+                    step_status = "accepted" if status == "command_accepted" else "verified"
+                    self.store.step_result(request_id, index, step_status, result)
+                    if "snapshot" in result:
+                        guard["expected_snapshot"] = result["snapshot"]
                 elif status == "already_selected":
                     self.store.step_result(request_id, index, "already_satisfied", result)
                     guard["expected_snapshot"] = guard.get("last_snapshot")
@@ -61,8 +64,13 @@ class TaskWorkflow:
                     })
                     prior = self.store.get(request_id)["steps"][:index]
                     final = "unverified" if outcome == "unverified" else "partial" if any(
-                        item["status"] in {"verified", "already_satisfied"} for item in prior) else outcome
+                        item["status"] in {"verified", "accepted", "already_satisfied"} for item in prior) else outcome
                     return self.store.finish(request_id, final)
+            record = self.store.get(request_id)
+            if any(step.get("status") == "accepted" for step in record["steps"]):
+                if all(step.get("status") in {"accepted", "already_satisfied"} for step in record["steps"]):
+                    return self.store.finish(request_id, "command_accepted")
+                return self.store.finish(request_id, "command_accepted")
             return self.store.finish(request_id, "completed")
 
         try:

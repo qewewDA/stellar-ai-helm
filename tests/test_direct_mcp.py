@@ -106,9 +106,14 @@ def test_tool_contract_separates_observation_from_writes(config_path):
                           "queue_starbase_module", "queue_starbase_building", "recruit_army", "recruit_armies_at_starbase", "add_system_claim",
                           "list_wars", "declare_war", "offer_peace", "list_ships", "set_ship_design",
                           "search_game_knowledge", "get_game_definition", "get_wiki_reference", "knowledge_status",
+                          "list_ship_sizes", "list_ship_sections", "list_ship_components", "list_ship_designs",
                           "plan_intent",
                           "execute_plan", "task_result", "cancel_task", "submit_completion"}
     assert tools["observe_empire"].annotations.readOnlyHint is True
+    assert tools["list_ship_sizes"].annotations.readOnlyHint is True
+    assert tools["list_ship_sections"].annotations.readOnlyHint is True
+    assert tools["list_ship_components"].annotations.readOnlyHint is True
+    assert tools["list_ship_designs"].annotations.readOnlyHint is True
     assert tools["list_pending_events"].annotations.readOnlyHint is True
     assert tools["list_planet_decisions"].annotations.readOnlyHint is True
     assert tools["enact_planet_decision"].annotations.readOnlyHint is False

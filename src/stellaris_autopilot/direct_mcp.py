@@ -31,6 +31,9 @@ from .direct_observe import DirectObserver
 from .direct_orders import Order, parse_order, validate_order, verify_order
 from .engine import game_date
 from .journal import Journal
+from .write_mode import reset_verification, use_verification, verification_required
+from .deferred_verification import attach_pending_flag, settle_accepted
+from . import ship_knowledge
 from .mcp_server import _PreviewJournal
 from .observe import Observation, fresh
 from .native import (
@@ -277,20 +280,46 @@ class DirectConnection:
         except (ValueError, OSError):
             raise ValueError("Cannot read a stable direct snapshot; request a game-state dump first") from None
 
+    def has_accepted_operations(self) -> bool:
+        config = _configuration(self.config_path)
+        journal_path = config.state_dir / "journal.sqlite"
+        if not journal_path.is_file():
+            return False
+        journal = Journal(journal_path)
+        try:
+            return bool(journal.accepted())
+        finally:
+            journal.close()
+
     def observe(self) -> dict:
         config = _configuration(self.config_path)
         observation = self._read(DirectObserver(config.dump_path, config.country_id))
         # Observation remains useful when stale. A write requires the full gate.
         validate_connection(config, observation, require_fresh=False)
-        return {**_public(observation), "fresh": fresh(observation, config.max_snapshot_age_seconds),
-                "capability": "experimental fixed direct actions"}
+        result = {**_public(observation), "fresh": fresh(observation, config.max_snapshot_age_seconds),
+                  "capability": "experimental fixed direct actions"}
+        journal_path = config.state_dir / "journal.sqlite"
+        if not journal_path.is_file():
+            return result
+        journal = Journal(journal_path)
+        try:
+            return attach_pending_flag(result, journal)
+        finally:
+            journal.close()
 
     def request_observation(self) -> dict:
         config = _configuration(self.config_path)
         with _controller_lock(config):
             result = self._fresh_observation(config, DirectObserver(config.dump_path, config.country_id))
             result.pop("_observation", None)
-            return result
+            journal_path = config.state_dir / "journal.sqlite"
+            if not journal_path.is_file():
+                return result
+            journal = Journal(journal_path)
+            try:
+                return settle_accepted(result, journal)
+            finally:
+                journal.close()
 
     def _fresh_observation(self, config: DirectConfig, observer: DirectObserver) -> dict:
         """Request one dump and return it only once it is newer than the request.
@@ -538,7 +567,7 @@ class DirectConnection:
             query_result = None
             native_status = None
             try:
-                if journal.unresolved():
+                if journal.blocking():
                     return {"status": "blocked", "reason": "An unresolved direct operation needs local inspection"}
                 # Parsing a real dump can take seconds; reload authorization after it.
                 if _configuration(self.config_path) != config:
@@ -575,6 +604,13 @@ class DirectConnection:
                     self.native_bridge.run_inbox(dump_token)
                     verification_dumps = 1
                 journal.update(operation_id, "dispatched", f"Direct action published; token={token}")
+                if not verification_required() and selection is not None:
+                    result, published = _finish_fast(
+                        self, config, journal, before, operation_id, token,
+                        action_id, order, selection, published,
+                    )
+                    if result is not None:
+                        return result
                 deadline = time.monotonic() + config.verification_timeout_seconds
                 reason = "No fresh matching receipt and postconditions; inspect game readiness and native wake status"
                 while time.monotonic() < deadline:
@@ -746,6 +782,86 @@ class DirectConnection:
                     journal.close()
 
 
+def _accepted_receipt(action_id, operation_id, token, before, *, order=None, selection=None, native_status=None):
+    receipt = {
+        "status": "command_accepted",
+        "action": action_id,
+        "id": operation_id,
+        "token": token,
+        "snapshot": before.digest,
+        "date": before.state["date"],
+        "deferred_verification": "pending",
+        "note": "The game validator accepted this command; verification is deferred to the next "
+                "request_observation or session_brief dump.",
+    }
+    if order is not None:
+        receipt["order"] = order.to_dict()
+    if selection is not None:
+        key = ("command" if type(selection).__name__.startswith("Resolved")
+               or type(selection).__name__ in {"ColonyShipConstruction", "ShipConstruction", "FleetOperation"}
+               else "pause" if type(selection).__name__ == "PauseRequest"
+               else "construction" if "Construction" in type(selection).__name__
+               else "research")
+        receipt[key] = selection.to_dict()
+    if native_status is not None:
+        receipt["native_result"] = native_status
+    return receipt
+
+
+def _finish_fast(connection, config, journal, before, operation_id, token,
+                 action_id, order, selection, published):
+    """Return (receipt, published) as soon as the game validator accepts; no verification dump."""
+    deadline = time.monotonic() + config.verification_timeout_seconds
+    reason = "No validator receipt; inspect before retrying"
+    native_status = None
+    try:
+        while time.monotonic() < deadline:
+            if (config.state_dir / "STOP").exists():
+                if selection is not None:
+                    connection.native_bridge.cancel(token)
+                reason = "Stopped while awaiting the connection receipt"
+                break
+            try:
+                native_status = connection.native_bridge.result(token)
+                native_matches = _native_matches(
+                    native_status, token, selection.kind, selection.to_dict())
+                if (native_matches and native_status.get("status") == "blocked"
+                        and native_status.get("submitted") is False):
+                    disarm_inbox(config)
+                    published = False
+                    journal.update(operation_id, "reconciled",
+                                   "Native pre-dispatch validation rejected the request; no command transferred")
+                    return {"status": "blocked",
+                            "reason": "The game rejected this action before submission; no native order was dispatched",
+                            "native_validation": native_status}, published
+                if native_status is not None and (
+                        not native_matches or native_status.get("status") in {"blocked", "ambiguous", "cancelled"}):
+                    reason = "Native dispatch was rejected or became ambiguous; inspect before retrying"
+                    break
+                if native_matches and native_status.get("status") == "submitted":
+                    disarm_inbox(config)
+                    published = False
+                    journal.update(operation_id, "accepted",
+                                   f"Validator accepted; deferred verification; token={token}")
+                    return _accepted_receipt(action_id, operation_id, token, before,
+                                             order=order, selection=selection,
+                                             native_status=native_status), published
+            except (ValueError, OSError) as exc:
+                reason = str(exc)
+            time.sleep(config.poll_seconds)
+        journal.update(operation_id, "unverified", reason + (
+            "; native=" + json.dumps(native_status, sort_keys=True) if native_status is not None else ""))
+        return {"status": "unverified", "id": operation_id, "reason": reason,
+                **({"native_result": native_status} if native_status is not None else {})}, published
+    except BaseException:
+        try:
+            journal.update(operation_id, "unverified", "Direct dispatch interrupted; inspect before retrying")
+        except (ValueError, Exception):
+            pass
+        raise
+
+
+
 def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridge | None = None,
                         game_knowledge: GameKnowledge | None = None,
                         connection: DirectConnection | None = None,
@@ -818,14 +934,28 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                             definitions=lambda kind, category, object_id: country_definition(kind, category, object_id))
 
     async def call_write(method, *args, **kwargs):
+        verify = kwargs.pop("verify", None)
+        token = use_verification(verify)
         try:
             return await asyncio.to_thread(method, *args, **kwargs)
         except DirectLockBusy:
             return {"status": "busy", "reason": "Another writer owns the game mailbox; this request was not queued"}
+        finally:
+            reset_verification(token)
 
     @server.tool(annotations=plan_writing)
-    async def execute_plan(request_id: str, steps: PlanSteps, expected_snapshot: str | None = None) -> dict:
-        """Execute 1..20 precise actions serially; return all verified receipts in this same call.
+    async def execute_plan(request_id: str, steps: PlanSteps, expected_snapshot: str | None = None,
+                           verify: StrictBool | None = None) -> dict:
+        """Execute 1..20 precise actions serially; return receipts in this same call.
+
+        Default is fast mode: each step returns command_accepted once the game
+        validator accepts, without a per-step verification dump. Deferred
+        verification of all accepted steps is settled on the next
+        request_observation or session_brief (one dump). Pass verify=true (or
+        set STELLARIS_AUTOPILOT_VERIFY) for the old per-step dump path. Completed
+        with every step verified still means dispatch verified, not natural
+        completion. Fast receipts use status command_accepted and
+        deferred_verification=pending.
 
         Use one stable unique request_id for one intent. Retrying the SAME ID and
         exact plan retrieves its original state without dispatching again; changed
@@ -837,7 +967,11 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         prior orders remain. Completed means dispatch verified, not natural completion.
         Never use a new ID to replay an uncertain result. No automatic rollback.
         """
-        return await workflow.execute_async(request_id, steps, expected_snapshot)
+        token = use_verification(verify)
+        try:
+            return await workflow.execute_async(request_id, steps, expected_snapshot)
+        finally:
+            reset_verification(token)
 
     @server.tool(annotations=readonly)
     async def task_result(request_id: str, wait_seconds: Annotated[StrictInt, Field(ge=0, le=30)] = 0) -> dict:
@@ -945,10 +1079,86 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
         except ValueError as error:
             return {"status": "blocked", "side_effects": "none", "reason": str(error)}
 
+    def _enrich_observation(observed):
+        if not isinstance(observed, dict) or event_catalog_provider is None:
+            return observed
+        state = observed.get("state")
+        if not isinstance(state, dict):
+            return observed
+        try:
+            catalog = event_catalog_provider()
+        except (OSError, ValueError):
+            return observed
+        from .event_commands import describe_pending_events
+        described = describe_pending_events(state, catalog)
+        if not isinstance(described, dict):
+            return observed
+        enriched = dict(observed)
+        enriched["state"] = {**state, "pending_events_described": described}
+        return enriched
+
+    def _game_dir():
+        provider = getattr(connection, "game_dir", None)
+        if callable(getattr(connection, "context", None)):
+            try:
+                context = connection.context()
+                if isinstance(context, dict) and context.get("game_dir"):
+                    return Path(context["game_dir"])
+            except (TypeError, ValueError, OSError, AttributeError):
+                pass
+        if isinstance(provider, Path):
+            return provider
+        return None
+
     @server.tool(annotations=readonly)
     def knowledge_status() -> dict:
         """Read local data version, coverage, import status and unresolved source limits."""
         return knowledge().status()
+
+    @server.tool(annotations=readonly)
+    def list_ship_sizes() -> dict:
+        """List every ship size with section slots, required component sets, hull and prereqs.
+
+        Numbers come from the versioned knowledge bundle (and weapon CSV when baked
+        or readable from the attached game dir). Missing or still-scripted values
+        are marked known=false; nothing is invented.
+        """
+        bundle = knowledge().bundle
+        return ship_knowledge.list_ship_sizes(bundle, game_dir=_game_dir())
+
+    @server.tool(annotations=readonly)
+    def list_ship_sections(ship_size: str) -> dict:
+        """List section templates and slot layouts that fit one ship size."""
+        bundle = knowledge().bundle
+        return ship_knowledge.list_ship_sections(bundle, ship_size, game_dir=_game_dir())
+
+    @server.tool(annotations=readonly)
+    def list_ship_components(slot_size: str | None = None, component_type: str | None = None,
+                             query: str | None = None) -> dict:
+        """List ship components with exact effects, costs and tech prerequisites.
+
+        Filter by slot_size (small/medium/large/...), component_type (instant,
+        utility, ... or a component_set / tag) and an optional name/id query.
+        Weapon stats come from weapon_components.csv when available.
+        """
+        bundle = knowledge().bundle
+        return ship_knowledge.list_ship_components(
+            bundle, slot_size=slot_size, component_type=component_type, query=query, game_dir=_game_dir())
+
+    @server.tool(annotations=readonly)
+    async def list_ship_designs() -> dict:
+        """List this empire's current ship designs (size, sections, slot components) and which components are unlocked.
+
+        Uses the latest snapshot; call request_observation first for a fresh dump.
+        Unlocked status follows observed completed technologies versus each
+        component's prerequisites. If research completion is unknown, unlocks are
+        omitted and unlocked_components_known is false.
+        """
+        observed = await call_write(connection.observe)
+        state_observed = observed if isinstance(observed, dict) else {}
+        if state_observed.get("status") in {"blocked", "busy", "stopped"} and "state" not in state_observed:
+            return {"status": "blocked", "reason": "No current observation", "observation": observed, "known": False}
+        return ship_knowledge.list_live_ship_designs(state_observed, knowledge().bundle, game_dir=_game_dir())
 
     @server.tool(annotations=readonly)
     async def observe_empire(view: Literal["brief", "full"] = "brief") -> dict:
@@ -956,22 +1166,29 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
 
         view='brief' (default) returns a planning subset: date, snapshot,
         resources, fleets/ships, wars, claims, construction, diplomacy
-        pacts/proposals, pause, and compact control queues. Missing keys are
-        omitted; unknown facts stay marked unknown (never rewritten as empty
-        lists). view='full' returns the complete observation.
+        pacts/proposals, pause, compact control queues, own planets
+        (planet_id, districts, zones, building instances, construction queue),
+        research candidates, our pending events, main species rights, and
+        current policies/edicts. Missing keys are omitted; unknown facts stay
+        marked unknown (never rewritten as empty lists). view='full' returns
+        the complete observation. If commands were accepted and not yet
+        settled, deferred_verification.pending is true and this snapshot may
+        predate those writes; call request_observation or session_brief.
         """
         observed = await call_write(connection.observe)
-        return apply_observation_view(observed, observation_view(view))
+        return apply_observation_view(_enrich_observation(observed), observation_view(view))
 
     @server.tool(annotations=writing)
     async def request_observation(view: Literal["brief", "full"] = "brief") -> dict:
         """Ask the running game for a fresh dump, then validate its empire, build and session.
 
         The dump itself is unchanged; view filters the returned payload like
-        observe_empire (default brief).
+        observe_empire (default brief). This dump also settles every
+        deferred_verification row that can be decided from positive
+        postconditions (verifications[].status verified|failed|unverified).
         """
         observed = await call_write(connection.request_observation)
-        return apply_observation_view(observed, observation_view(view))
+        return apply_observation_view(_enrich_observation(observed), observation_view(view))
 
     @server.tool(annotations=writing)
     async def probe_connection() -> dict:

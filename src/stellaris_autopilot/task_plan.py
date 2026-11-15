@@ -276,10 +276,11 @@ def _dispatch_recruit_armies_at_starbase(connection, starbase_id, army_type, spe
         result = connection.army_command("recruit_army", True, planet_id=planet_id,
                                          army_type=army_type, species_id=species_id, starbase_id=starbase_id)
         receipts.append({"planet_id": planet_id, "result": result})
-        if not isinstance(result, dict) or result.get("status") != "command_verified":
+        if not isinstance(result, dict) or result.get("status") not in {"command_verified", "command_accepted"}:
             return {"status": "partial" if len(receipts) > 1 else (result or {}).get("status", "blocked"),
                     "planets": planets, "receipts": receipts}
-    return {"status": "command_verified", "planets": planets, "receipts": receipts}
+    status = "command_accepted" if any(item["result"].get("status") == "command_accepted" for item in receipts) else "command_verified"
+    return {"status": status, "planets": planets, "receipts": receipts}
 
 
 def dispatch_step(connection, step: dict, definitions=None):

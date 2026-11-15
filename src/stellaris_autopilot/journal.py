@@ -39,7 +39,20 @@ class Journal:
     def unresolved(self) -> list[dict]:
         return [dict(row) for row in self.db.execute(
             "SELECT id,snapshot,action,country,status,detail,created_at "
+            "FROM operations WHERE status IN ('pending','dispatched','accepted','unverified') ORDER BY id"
+        )]
+
+    def blocking(self) -> list[dict]:
+        """In-flight or ambiguous rows that must block a new write. Accepted ops may coexist."""
+        return [dict(row) for row in self.db.execute(
+            "SELECT id,snapshot,action,country,status,detail,created_at "
             "FROM operations WHERE status IN ('pending','dispatched','unverified') ORDER BY id"
+        )]
+
+    def accepted(self) -> list[dict]:
+        """Fast-path rows waiting for a deferred verification dump (includes before_json)."""
+        return [dict(row) for row in self.db.execute(
+            "SELECT * FROM operations WHERE status='accepted' ORDER BY id"
         )]
 
     def claim(self, snapshot: str, action: str, state: dict) -> int | None:
@@ -75,9 +88,12 @@ class Journal:
 
     def update(self, operation_id: int, status: str, detail: str):
         transitions = {
-            "dispatched": ("pending",), "verified": ("dispatched",),
-            "unverified": ("pending", "dispatched", "unverified"),
-            "reconciled": ("pending", "dispatched", "unverified"),
+            "dispatched": ("pending",),
+            "accepted": ("dispatched",),
+            "verified": ("dispatched", "accepted"),
+            "failed": ("accepted",),
+            "unverified": ("pending", "dispatched", "accepted", "unverified"),
+            "reconciled": ("pending", "dispatched", "accepted", "unverified", "failed"),
         }
         if status not in transitions:
             raise ValueError("Invalid journal status")

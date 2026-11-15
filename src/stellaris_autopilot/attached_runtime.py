@@ -97,6 +97,19 @@ class AttachedRuntime:
             time.sleep(0.1)
         raise CampaignError("Attached game operation timed out; do not replay it")
 
+    def _existing_identity(self):
+        """Read a parseable on-disk dump without requesting a new one. None if unusable."""
+        path = self.user_dir / "save games" / "dump_qs_direct.sav.txt"
+        observer = DirectObserver(path, "0")
+        try:
+            observed = observer.read_identity()
+        except (ValueError, OSError):
+            return None, None
+        runtime = getattr(self.native, "last_runtime", None)
+        receipt = {"runtime": runtime if isinstance(runtime, dict) else {"paused": True},
+                   "reused_existing_dump": True}
+        return observed, receipt
+
     def _fresh(self):
         """Request a dump and return a full observation of the first fresh, stable generation."""
         return self._await_dump(targeted=False)
@@ -177,14 +190,26 @@ class AttachedRuntime:
                 "Pause the intended loaded save. After the user confirms it is paused, call connect_game(retry=true) once.")
         self._phase("read_current_save")
         # Identity gates need only a targeted extraction; the backup below
-        # still fully parses and verifies these exact bytes.
-        observed, receipt = self._fresh_identity()
+        # still fully parses and verifies these exact bytes. When bind already
+        # confirmed the game is paused and a parseable dump is already on disk,
+        # reuse it instead of requesting a redundant first dump. Session flags
+        # still require the post-event dump below.
+        observed, receipt = self._existing_identity()
+        if observed is None:
+            observed, receipt = self._fresh_identity()
         meta = observed.state.get("metadata", {})
         game_version = getattr(self.native, "game_version", "Cygnus v4.5.2")
         observation_only = getattr(self.native, "observation_only", False) is True
-        if (observed.state.get("country_id") != "0" or meta.get("player_country_ids") != ["0"]
-                or meta.get("ironman") not in (False, "no") or meta.get("multiplayer") in (True, "yes")
-                or meta.get("game_version") != game_version or not meta.get("campaign_id")):
+        identity_ok = (observed.state.get("country_id") == "0" and meta.get("player_country_ids") == ["0"]
+                       and meta.get("ironman") in (False, "no") and meta.get("multiplayer") not in (True, "yes")
+                       and meta.get("game_version") == game_version and bool(meta.get("campaign_id")))
+        if observed is not None and not identity_ok and receipt.get("reused_existing_dump"):
+            observed, receipt = self._fresh_identity()
+            meta = observed.state.get("metadata", {})
+            identity_ok = (observed.state.get("country_id") == "0" and meta.get("player_country_ids") == ["0"]
+                           and meta.get("ironman") in (False, "no") and meta.get("multiplayer") not in (True, "yes")
+                           and meta.get("game_version") == game_version and bool(meta.get("campaign_id")))
+        if not identity_ok:
             raise CampaignError("Load the supported single-player non-Ironman country 0 before connecting")
         if receipt.get("runtime", {}).get("paused") is not True:
             raise CampaignError("Pause the loaded game before connecting")

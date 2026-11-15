@@ -26,8 +26,8 @@
 
 1. `connect_game()`（游戏须已暂停）→ `attached_status()` 确认 `connected`。
 2. `observe_empire()` 默认返回 brief 规划视图；需要完整状态时传 `view="full"`。需要最新数据时先 `request_observation()`（同样默认 brief）。
-3. 调用玩法工具。每个写操作：本地校验 → 正常原生命令 → 游戏自带校验器 → 新存档转储比对后置条件。返回 `command_verified` 才算成功；`blocked` 带原因，未发出命令。
-4. 推进时间：`set_paused(false)` / `set_paused(true)`，或 `execute_plan` 批量执行。`execute_plan` 的 step kind 已覆盖原先仅有单项工具的操作：`set_species_right`、`enact_planet_decision`、`queue_starbase_module`、`queue_starbase_building`、`recruit_army`、`recruit_armies_at_starbase`、`add_system_claim`、`declare_war`、`offer_peace`、`set_ship_design`（参数与单项工具相同）。外交仍用已有 `propose_*` / `close_borders` 等 kind，没有 `propose_diplomacy` kind。整批共用一次核验 dump 尚未实现（各步 verify 要求“其余状态不变”，后一步会破坏前一步的比对）。
+3. 调用玩法工具。默认是 **fast 模式**：游戏自带校验器接受命令后立即返回 `command_accepted`（`deferred_verification: pending`），不做逐条核验 dump。随后一次 `request_observation` 或（若有待核验项）`session_brief` 会打一份 dump，用 `deferred_verification.verifications[]`（字段 `id` / `action` / `status` / `reason`，status 为 `verified` / `failed` / `unverified`）结算所有已接受的操作。`observe_empire` 只读、不 dump；若有未结算的 accepted 写操作，会标 `deferred_verification.pending=true`，并说明快照可能早于那些写入。需要旧的严格路径时，给 `execute_plan(..., verify=true)` 或设置环境变量 `STELLARIS_AUTOPILOT_VERIFY=1`：此时仍返回 `command_verified` 才算严格成功。`blocked` 带原因，未发出命令。未在延期核验中确定的操作会留在日志（`unverified`），**不要重放**。
+4. 推进时间：`set_paused(false)` / `set_paused(true)`，或 `execute_plan` 批量执行。`execute_plan` 的 step kind 已覆盖原先仅有单项工具的操作：`set_species_right`、`enact_planet_decision`、`queue_starbase_module`、`queue_starbase_building`、`recruit_army`、`recruit_armies_at_starbase`、`add_system_claim`、`declare_war`、`offer_peace`、`set_ship_design`（参数与单项工具相同）。外交仍用已有 `propose_*` / `close_borders` 等 kind，没有 `propose_diplomacy` kind。fast 模式下整份计划在所有步骤都被校验器接受后返回 `command_accepted`；延期核验由下一次观察 dump 统一结算。
 5. 结束：`checkpoint_game()`（检查点写入 `save games/qs_mcp`，不覆盖原存档）→ `disconnect_game(save=false)`。游戏保持运行。
 
 结果不明确的操作会留在日志中（`status()` 的 `unresolved`）；**不要换新 ID 重放**。
@@ -37,7 +37,7 @@
 | 类别 | 工具 | 状态 |
 | --- | --- | --- |
 | 连接/时间 | `connect_game` `attached_status` `checkpoint_game` `disconnect_game` `set_paused` `probe_connection` | 实机通过 |
-| 观察 | `observe_empire(view)` `request_observation(view)` `session_brief` `list_actions` `status` | `observe_empire`/`request_observation` 默认为 `view="brief"`（规划子集：日期、snapshot、资源、舰队/舰船、战争、宣称、建造队列、外交 pacts/proposals、暂停）；缺省字段省略，未知事实保持 `known:false`，不会改写成空列表。完整状态用 `view="full"`。`session_brief` 在未连接时会 `connect_game(retry=false)` 一次（失败不重试；未暂停不 dump），已连接则只读最新快照。 |
+| 观察 | `observe_empire(view)` `request_observation(view)` `session_brief` `list_actions` `status` | `observe_empire`/`request_observation` 默认为 `view="brief"`（规划子集：日期、snapshot、资源、舰队/舰船、战争、宣称、建造队列、外交 pacts/proposals、暂停、己方星球 planet_id/区划/区块/建筑实例与建造队列、研究当前项与备选、我方待处理事件、主物种权利、现行政策与法令）；缺省字段省略，未知事实保持 `known:false`，不会改写成空列表。完整状态用 `view="full"`。`request_observation` 会结算待核验的 accepted 写操作。`session_brief` 在未连接时会 `connect_game(retry=false)` 一次（失败不重试；未暂停不 dump）；已连接且无待核验项时只读最新快照，有待核验项时会打一份 dump 并结算。 |
 | 研究/建设 | `select_research` `queue_district` `queue_building` `upgrade_building` `demolish_building` `convert_zone` `cancel_construction` `move_queue_item` | 见 direct-control.md |
 | 造舰/舰队 | `queue_ship` `queue_colony_ship` `issue_order` `survey_planet` `build_station` `colonize_planet` `set_fleet_stance` | 见 direct-control.md；`fleet_wait` 本轮复测通过 |
 | 政策/法令 | `list_policies` `set_policy` `activate_edict` `deactivate_edict` | `set_policy`（贸易政策）实机通过 |
@@ -52,6 +52,7 @@
 | 外交（提议） | `propose_diplomacy`：embassy / commercial_pact / research_agreement / migration_pact / non_aggression_pact | 使馆被接受；商业/研究/移民提议送达，AI 自行拒绝（`recent_proposals` 显示 declined_or_expired） |
 | 战争 | `list_wars` `declare_war(target_country_id, war_goal)` `offer_peace(target_country_id, terms, war_id)` | 实机通过：对 66（Saiiban League）`wg_conquest` 宣战得到战争 `0`（防御方含 65/66/16777218）；随即 `status_quo` 求和，经 `our_proposals` 中一条新的 `action_offer_peace` 验证（战争仍在，待对方接受）。`terms`：`status_quo` / `surrender` / `demand_surrender`。 |
 | 舰船设计 | `list_ships` `set_ship_design(ship_id, design_id)` | 实机通过：舰队 3 的船 3 从设计 49（待升级 3057）改为现役设计 3057，升级标记清除。只改一艘已有船的设计，不新建设计。 |
+| 舰船知识 | `list_ship_sizes()` `list_ship_sections(ship_size)` `list_ship_components(slot_size, component_type, query)` `list_ship_designs()` | 尺寸/区块/组件来自版本化知识库（武器数值叠加 weapon_components.csv）。缺值标 `known:false`，不编造。`list_ship_designs` 读取当前帝国设计（尺寸、区块、槽位组件）以及已解锁组件（对照已完成科技）；研究完成度未知时 `unlocked_components_known=false`。 |
 
 ### 已知限制
 

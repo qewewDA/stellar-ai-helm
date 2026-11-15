@@ -75,10 +75,14 @@ def main():
         async def session_brief() -> dict:
             """Return a brief observation, connecting once if needed (retry=false, no automatic retry).
 
-            If already connected, reads the latest snapshot only (no extra dump). If not
-            connected, calls connect_game(retry=false): failures are returned as-is;
-            an unpaused game is not dumped. The payload uses observe_empire view=brief.
+            If already connected and no accepted writes are waiting for deferred
+            verification, reads the latest snapshot only (no extra dump). If accepted
+            writes are pending, requests one fresh dump and settles all of them.
+            If not connected, calls connect_game(retry=false): failures are returned
+            as-is; an unpaused game is not dumped. The payload uses observe_empire
+            view=brief and includes deferred_verification when applicable.
             """
+            from stellaris_autopilot.event_commands import describe_pending_events
             from stellaris_autopilot.observation_view import apply_observation_view
             status = session.status()
             if not (isinstance(status, dict) and (status.get("connected") is True
@@ -89,7 +93,20 @@ def main():
                                                       or result.get("status") == "connected"
                                                       or result.get("state") == "connected")):
                     return result
-            observed = await asyncio.to_thread(session.observe)
+            pending = False
+            try:
+                pending = bool(session.has_accepted_operations())
+            except (AttributeError, ValueError, OSError):
+                pending = False
+            observed = await asyncio.to_thread(
+                session.request_observation if pending else session.observe)
+            if isinstance(observed, dict) and isinstance(observed.get("state"), dict):
+                try:
+                    catalog = _event_catalog(args.game_dir, args.user_dir)()
+                    described = describe_pending_events(observed["state"], catalog)
+                    observed = {**observed, "state": {**observed["state"], "pending_events_described": described}}
+                except (OSError, ValueError):
+                    pass
             return apply_observation_view(observed, "brief")
 
         @server.tool(annotations=writing)

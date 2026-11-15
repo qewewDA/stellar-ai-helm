@@ -247,8 +247,11 @@ class GameKnowledge:
         return cls(json.loads(Path(path).read_text(encoding="utf-8")))
 
     def status(self) -> dict:
-        return {key: copy.deepcopy(self.bundle.get(key)) for key in (
-            "game_version", "executable_sha256", "wiki_status", "scope", "interpretation", "warnings")} | {
+        status = {key: copy.deepcopy(self.bundle.get(key)) for key in (
+            "game_version", "executable_sha256", "wiki_status", "scope", "interpretation", "warnings")}
+        if self.bundle.get("bundle_revision") is not None:
+            status["bundle_revision"] = copy.deepcopy(self.bundle.get("bundle_revision"))
+        return status | {
                 "record_count": len(self.bundle["records"]), "wiki_page_count": len(self.bundle["wiki_pages"]),
                 "ambiguous_record_count": sum(record.get("ambiguous") is True for record in self.bundle["records"].values()),
                 "categories": {category: sum(record.get("category") == category for record in self.bundle["records"].values())
