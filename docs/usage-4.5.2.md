@@ -50,10 +50,12 @@
 | 外交 | `list_diplomacy`（含 `pacts`、`our_proposals`、`recent_proposals`） | 实机通过 |
 | 外交（单方面） | `close_borders` `open_borders` `insult` `make_rival` `recall_embassy` `improve_relations` `harm_relations` | `make_rival`、`recall_embassy`、派遣使节实机通过 |
 | 外交（提议） | `propose_diplomacy`：embassy / commercial_pact / research_agreement / migration_pact / non_aggression_pact | 使馆被接受；商业/研究/移民提议送达，AI 自行拒绝（`recent_proposals` 显示 declined_or_expired） |
+| 战争 | `list_wars` `declare_war(target_country_id, war_goal)` `offer_peace(target_country_id, terms, war_id)` | 实机通过：对 66（Saiiban League）`wg_conquest` 宣战得到战争 `0`（防御方含 65/66/16777218）；随即 `status_quo` 求和，经 `our_proposals` 中一条新的 `action_offer_peace` 验证（战争仍在，待对方接受）。`terms`：`status_quo` / `surrender` / `demand_surrender`。 |
+| 舰船设计 | `list_ships` `set_ship_design(ship_id, design_id)` | 实机通过：舰队 3 的船 3 从设计 49（待升级 3057）改为现役设计 3057，升级标记清除。只改一艘已有船的设计，不新建设计。 |
 
 ### 已知限制
 
 - **互不侵犯条约**：脚本条件（信任 50、使馆）都满足，仍被游戏引擎内部的硬编码检查拒绝，且不返回原因文本（校验函数 0x9bd040 中无提示的关系位/国家检查）。原因未定位，暂不可用。
 - **结束宿敌** `end_rivalry`：游戏规定宿敌宣布后 10 年内不能结束（测试局为 2210.01.24 前），未实机验证。
-- **未实现**：宣战/和平（宣称已可用）、联邦与附庸、星区管理、领袖招募与任命、舰船设计选择。
+- **未实现**：联邦与附庸、星区管理、领袖招募与任命。宣战/和平与舰船设计选择已实机验证，见上表。
 - 宏观国策仍由使用者决定；本项目不会切换到游戏原生 AI 托管。
