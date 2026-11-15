@@ -26,17 +26,17 @@ def emit(value):
 def install_mod(mod_dir: Path):
     source = Path(__file__).resolve().parents[2] / "mod" / "stellaris_ai_autopilot"
     if not source.is_dir():
-        source = Path(sys.prefix) / "share" / "stellaris-ai-autopilot" / "mod"
+        source = Path(sys.prefix) / "share" / "stellar-ai-helm" / "mod"
     if not source.is_dir():
         # Isolated runners may load the wheel from a cache separate from
         # sys.prefix. RECORD paths locate that installation's data files.
         try:
-            package = metadata.distribution("stellaris-ai-autopilot")
+            package = metadata.distribution("stellar-ai-helm")
         except metadata.PackageNotFoundError:
             pass
         else:
             for resource in package.files or ():
-                if resource.parts[-4:] == ("share", "stellaris-ai-autopilot", "mod", "descriptor.mod"):
+                if resource.parts[-4:] == ("share", "stellar-ai-helm", "mod", "descriptor.mod"):
                     descriptor = Path(package.locate_file(resource))
                     if descriptor.is_file():
                         source = descriptor.parent

@@ -1,25 +1,65 @@
-# Stellaris AI Autopilot · 群星 AI 自动驾驶
+[English](README.en.md) | 简体中文
 
-> 一次接入，之后直接中文指挥：先生成离线入口，把 `stellaris_agent` 提示词发到同一个Agent对话一次，之后直接说中文命令。详见 [离线 AI 入口](docs/ai-entry.md)。
+# stellar-ai-helm
 
-用 MCP 精确指挥单人《群星》：模型只能从新观察到的状态里选择具体星球、舰队、科技和已授权动作，不能提交控制台脚本、坐标、原生地址或文件路径。推荐入口是附加已运行模式 `scripts/serve_existing_game.py`：你先正常打开群星、读档并暂停，MCP 只连接当前局，不启动也不关闭游戏。需要由启动器创建进程并从最近不可变检查点接续时，使用保留的持久战役启动器 `scripts/serve_campaign.py`。
+在游戏运行时，通过《群星》自身的原生命令路径指挥 Stellaris 4.5.2 的 MCP 服务器。原生适配器校验 `stellaris.exe` 的精确 SHA-256，构建或哈希不符时拒绝原生控制。
 
-Python 3.11+，Windows 10/11 为实机目标；MIT 开源。本文描述的 MCP 入口不发送键盘或鼠标输入；旧的 Windows 输入路径另述。仓库只包含源码、Mod 模板和测试，不附带游戏本体、知识 JSON、真实存档或本机 MCP 配置。
+推荐入口是 `scripts/serve_existing_game.py`：由你手动启动游戏、读档并保持暂停，MCP 只附加当前这一局，不启动也不关闭游戏。仓库：<https://github.com/qewewDA/stellar-ai-helm>。
 
-## 当前能力与边界
+## 它是什么
 
-**已验证构建：`Cygnus v4.5.2 (9776)`。** 原生适配器固定校验 `stellaris.exe` 的 SHA-256（`400df27c82ddc845aa9dce79bd468d81f18f060d299cd263e3afa93aef4f7a83`），Frida 固定为 `17.9.4`；构建或哈希不符时拒绝原生控制。当前原生后端只支持玩家国家 `0`、单人、非铁人。这是固定版本、固定样本的实机结果，不能外推为全部 DLC、全部起源/特殊建筑/舰种或未来版本均已支持。
+stellar-ai-helm 把一局已暂停的单人、非铁人战役接到 MCP 客户端（例如 DeepSeek Harness）。模型通过标准 MCP 工具观察帝国状态，从游戏当前允许的选项里挑选动作，再沿游戏 AI 使用的原生命令路径下单。Python 导入包名仍是 `stellaris_autopilot`，现有命令行入口 `stellaris-autopilot` 保持不变，并增加了 `stellar-ai-helm` 别名。
 
-已经实机通过的范围包括：
+当前原生后端只支持玩家国家 `0`。已验证构建为 `Cygnus v4.5.2 (9776)`，`stellaris.exe` 的 SHA-256 为 `400df27c82ddc845aa9dce79bd468d81f18f060d299cd263e3afa93aef4f7a83`，Frida 固定为 `17.9.4`。这是固定版本、固定样本上的实机结果，不能外推到全部 DLC、全部起源或未来版本。
 
-- 暂停/恢复、暂停状态下观察，以及指定科研领域的精确科技选择；
-- 指定舰队的等待、环绕，以及跨系统移动/停止的订单入列；
-- 城市区划、指定分区建筑的正常付费入队，以及升级、拆除、转区和取消；
-- 普通与殖民船建造入队、指定天体勘察、采矿/科研/前哨站订单、普通殖民命令与殖民 landing。
+## 功能
 
-必须区分三种证据：**入队/下单成功**（新状态出现正确项目或订单）、**自然完成**（游戏推进到项目或舰队动作实际结束）、**landing/殖民发展**（殖民船真正落地、殖民地开始发展）。本仓库不会用前一种证据代替后一种：`queue_colony_ship` 只证明殖民船建造入队，`colonize_planet` 与 landing 另行验证，完整殖民发展仍未验证；造舰、勘察、建站和移动的多数结果只到精确入队/订单。内阁、传统和飞升选择保留给用户决定；战斗、外交和全部建设变更没有完整接口。
+在附加已运行的 4.5.2 并加上 `--extended` 后，当前接口覆盖：
 
-完整接口与逐项证据边界见 [MCP 逐项指挥](docs/direct-control.md)，持久战役的目录、保存与恢复见 [战役接续](docs/campaign.md)。旧的 Windows 键鼠输入和只读 MCP 仍在仓库中，但不是本入口的控制方式，说明见下文及 [无键鼠直连](docs/direct-connection.md)。
+- **研究**：指定领域选择科技
+- **建造**：区划、建筑的入队、升级、拆除、取消与队列调整
+- **区域特化**：按星球、区划和槽位列出当前特化与可选项；用 `convert_zone(planet_id, district_id, slot_index, target_zone_id)` 在空槽新建或替换已有特化
+- **政策 / 法令**：列出并设置政策，激活或关闭法令
+- **决议**：列出并颁布星球决议
+- **物种权利**：列出各物种当前权利，并设置主物种权利
+- **恒星基地**：模块、建筑、防御平台
+- **舰船 / 殖民 / 舰队**：造舰、殖民船、勘察、建站、殖民、舰队订单与姿态
+- **陆军**：在单颗星球招募，或从恒星基地向该星系各空闲己方星球同时开造
+- **宣称**：对星系增加一层宣称
+- **外交**：开关边境、侮辱、宿敌、使馆、改善或恶化关系，以及商业协定、研究协定、移民条约、互不侵犯等提议
+- **战争与和平**：宣战与提出和约（`status_quo` / `surrender` / `demand_surrender`）
+- **舰船设计**：将已有舰船改为帝国已有设计；查阅船体尺寸、区块、部件数值和当前设计（知识库缺值会标为未知，不编造）
+- **事件**：仅处理玩家（国家 0）的待处理事件并选择选项
+- **时间与检查点**：暂停或恢复、检查点（写入 `save games/qs_mcp`，不覆盖原存档）、断开连接
+- **批量执行**：`execute_plan` 一次串行执行 1 到 20 步
+
+工具存在不等于每一项都已在同一局实机走完全流程。逐项说明与实机状态见 [docs/usage-4.5.2.md](docs/usage-4.5.2.md)。
+
+不加 `--extended` 时，只开放已有实机证据的基础操作：`select_research`、`queue_district`、`queue_building`、`set_paused`，以及 `issue_order` 的 `fleet_wait` 与 `fleet_orbit`。
+
+仓库里还保留了启动器管理的持久战役入口 `scripts/serve_campaign.py`，说明见 [docs/campaign.md](docs/campaign.md)。日常推荐仍是附加已运行的游戏。
+
+## 可用性如何判定
+
+决议、政策、法令、物种权利选项、区划、建筑、区域特化，以及战争目标等需要「从一组选项里挑」的内容，都以游戏自带校验器当时的 potential / allow 判定为准，而不是固定清单。观察结果只列出当前通过前提的项，并标明现在能否颁布或建造；不能的，若游戏给了原因会一并附上。查不到的事实标为 `known: false` 或未知，不会改写成空列表，也不会编造数值。
+
+过期的观察不要继续下单；每次观察都会按当时帝国状态重新计算。
+
+## 快速模式与严格核验
+
+默认是**快速模式**：游戏校验器接受命令后立即返回 `command_accepted`（`deferred_verification: pending`），不在每一步后打存档核验。随后一次 `request_observation`，或在有待核验项时调用 `session_brief`，会打一份存档，用 `deferred_verification.verifications[]`（字段为 `id` / `action` / `status` / `reason`，status 为 `verified` / `failed` / `unverified`）统一结算。`observe_empire` 只读、不打 dump；若仍有未结算的写入，会标 `deferred_verification.pending=true`。
+
+需要逐步严格核验时，调用 `execute_plan(..., verify=true)`，或设置环境变量 `STELLARIS_AUTOPILOT_VERIFY=1`。此时成功结果为 `command_verified`。`blocked` 表示命令未发出。核验结果为 `failed` 或 `unverified` 的操作会留在日志里，**不要换 ID 重放**。
+
+## 运行要求
+
+- Windows 10/11（实机原生命令只在 Windows 上可用）
+- Stellaris 4.5.2，且 `stellaris.exe` 哈希与上面的精确 SHA-256 一致
+- Python 3.11+，使用 [uv](https://docs.astral.sh/uv/) 安装
+- Frida 17.9.4（`native` 额外依赖，仅 Windows 生效）
+- 单人、非铁人存档；由你手动启动游戏（不要带持久战役启动器的 `-qsowned=` 标记），读档后保持暂停
+
+知识库 JSON（`--knowledge-bundle`）不随仓库分发。政策、物种权利、恒星基地模块与建筑、陆军类型和舰船知识等工具需要它来核对定义。未显式指定时，默认会尝试仓库相对路径 `artifacts/qs-game-knowledge.json`，不存在则不启用知识工具。
 
 ## 安装
 
@@ -28,42 +68,25 @@ Python 3.11+，Windows 10/11 为实机目标；MIT 开源。本文描述的 MCP 
 ```powershell
 uv sync --frozen --extra dev --extra mcp --extra native
 uv run python scripts/serve_existing_game.py --help
-uv run python scripts/serve_campaign.py --help
 ```
 
-`native` 额外依赖安装 Frida（仅 Windows 生效）；`mcp` 提供 MCP 服务端。没有原生依赖时可以运行离线解析、模拟和只读 MCP，但不能建立原生控制。Linux/macOS 可运行观察、规划、模拟和测试，真实游戏控制只支持 Windows：
+`mcp` 提供 MCP 服务端，`native` 安装 Frida。没有原生依赖时可以跑离线解析、测试和只读 MCP，但不能建立原生控制。
 
-```bash
-uv sync --frozen --extra dev --extra mcp
-uv run stellaris-autopilot demo
-uv run pytest -q
-```
+## MCP 客户端配置
 
-`demo` 使用独立临时目录和 replay adapter，执行解析 → 授权 → 派单 → 新观察 → 后置条件 → SQLite 记录，输出 `SIMULATION` 和 `verified`。它不连接游戏，也不调用付费模型，不能当作实机验证。
-
-## 快速开始：附加已运行（推荐）
-
-先正常启动群星、手动读入要接续的存档并暂停；不要用本项目启动器启动这个实例。然后在仓库根目录运行：
-
-```powershell
-uv run python scripts/serve_existing_game.py `
-  --state-dir .\attached-state `
-  --game-dir "<Steam>\steamapps\common\Stellaris"
-```
-
-用户目录默认从 `game-dir\userdir.txt` 或 Documents 解析，也可以用 `--user-dir` 明确指定。同机有多个 `stellaris.exe` 时在本机加 `--pid`，不要让模型猜。`--extended` 与直连模式相同，`--knowledge-bundle` 可选。
-
-MCP 客户端配置示例（路径替换为本机实际值；`cwd` 指向仓库根目录）：
+先正常启动群星、读入要接续的存档并暂停，然后用 stdio 启动本服务。下面的参数形式与 DeepSeek Harness「群星自动驾驶」预设一致，请把路径换成你本机的实际位置：
 
 ```json
 {
   "mcpServers": {
-    "stellaris-existing": {
+    "stellaris": {
       "command": "<repo>\\.venv\\Scripts\\python.exe",
       "args": [
         "<repo>\\scripts\\serve_existing_game.py",
         "--state-dir", "<attached-state>",
-        "--game-dir", "<Steam>\\steamapps\\common\\Stellaris"
+        "--game-dir", "<Steam>\\steamapps\\common\\Stellaris",
+        "--extended",
+        "--knowledge-bundle", "<path-to-knowledge.json>"
       ],
       "cwd": "<repo>"
     }
@@ -71,116 +94,40 @@ MCP 客户端配置示例（路径替换为本机实际值；`cwd` 指向仓库�
 }
 ```
 
-该入口只附加当前已运行的游戏，不启动、不关闭、不自动载入旧检查点。连接成功后提供 `attached_status()`、`checkpoint_game()` 和 `disconnect_game(save=true)`：检查点写到游戏的 `save games/qs_mcp`，断开只释放 AI 接管，游戏继续运行。完整流程、身份校验、换档重连和常见问题见 [附加已运行群星](docs/attach-existing.md)。需要启动器自动加载最近检查点时，继续使用下面的持久战役模式。
+用户目录默认从 `game-dir\userdir.txt` 或 Documents 解析，也可用 `--user-dir` 指定，且必须与游戏实际使用的目录一致。同机有多个 `stellaris.exe` 时在本机加 `--pid`，不要让模型猜。
 
-## 快速开始：持久战役 MCP
+连接成功后可用 `attached_status()`、`checkpoint_game()` 和 `disconnect_game()`：检查点写到游戏的 `save games/qs_mcp`，断开只释放附加，游戏继续运行。
 
-启动器自己创建并持有游戏进程；启动前必须没有其他 `stellaris.exe` 在运行，并先在 Steam 客户端登录。它不会接管或关闭手动打开的游戏。默认安装目录可用 `--game-dir` 覆盖。
+## 推荐循环
 
-首次导入一个**单人、非铁人**存档（原档只读，导入后保留副本）：
+1. `session_brief()`：尚未连接时会以 `connect_game(retry=false)` 连接一次（失败不自动重试；游戏未暂停则不 dump）。已连接且没有待核验写入时，只读最新快照；有待核验项时打一份 dump 并结算。
+2. 只从本轮观察给出的当前可用列表里挑选，用一次 `execute_plan` 批量写入。
+3. 若需要时间推进，再使用 `set_paused` 恢复或暂停。
+4. 用 `request_observation`（或有待核验项时的 `session_brief`）统一结算延期核验。任一项为 `failed` 或 `unverified` 就停下来报告，不要重试。
 
-```powershell
-uv run python scripts/serve_campaign.py `
-  --campaign-dir .\campaign `
-  --initialize "<你的存档>.sav" --country 0 --single-player --non-ironman `
-  --game-dir "<Steam>\steamapps\common\Stellaris"
-```
+## DeepSeek Harness 预设「群星自动驾驶」
 
-首次成功后去掉 `--initialize`，之后每次连接同一个 `--campaign-dir`：
+这是为本 MCP 单独维护的 DeepSeek Harness Agent 预设，包名为 `@local/dsh-stellaris-mcp-preset`，不在本仓库内。当前维护副本在 `C:\Users\qwqwq\agent-tools\deepseek-harness-stellaris\`，安装目标是其中的 `bundle`。把该目录下的 `INSTALL-PROMPT.md` 全文贴进 DeepSeek Harness 的「创造模式」，按提示安装后，新建会话并选择「群星自动驾驶」。若提示已经装过，需要先卸载再安装。模型和温度在会话设置里选择，不能写进预设。
 
-```powershell
-uv run python scripts/serve_campaign.py `
-  --campaign-dir .\campaign `
-  --game-dir "<Steam>\steamapps\common\Stellaris"
-```
+## 安全约定
 
-MCP 客户端配置示例（路径替换为本机实际值；`cwd` 指向仓库根目录）：
+- 连接有暂停门禁：游戏必须已经暂停。不要绕过这道检查，也不要用模拟按键替用户点继续。
+- 不要启动、关闭或重启游戏；本入口不负责开关游戏进程。
+- 不要切换到游戏原生 AI 托管。内阁、传统和飞升选择留给使用者。
+- 只处理玩家（国家 0）事件，拒绝其他国家的事件。
+- 结果不明确的操作记入 journal，保留为 `unverified`，**不要换新 ID 重放**。
+- 不要猜测 PID，也不要猜测决议、政策、法令、权利、战争目标、星港或建造/特化的 ID；只从当前观察给出的可用列表里选。
 
-```json
-{
-  "mcpServers": {
-    "stellaris-campaign": {
-      "command": "<repo>\\.venv\\Scripts\\python.exe",
-      "args": [
-        "<repo>\\scripts\\serve_campaign.py",
-        "--campaign-dir", "<campaign-dir>",
-        "--game-dir", "<Steam>\\steamapps\\common\\Stellaris"
-      ],
-      "cwd": "<repo>"
-    }
-  }
-}
-```
+## 已知限制
 
-`--status` 只读检查 manifest、检查点和历史命令，不启动游戏。`--recover-last-checkpoint` 只在明确接受“从最近完成检查点恢复、丢弃上次未保存进度”时使用；存在未决命令时仍然拒绝。
+- 领袖招募与任命、联邦、附庸、星区管理尚未实现。
+- 非主物种的权利选项目前标为未知：游戏原生命令路径只处理主物种。
+- 原生命令仅支持哈希相符的 Stellaris 4.5.2。
+- 互不侵犯条约可能被游戏引擎内部的硬编码检查拒绝，且不返回原因文本；原因尚未定位，暂不可靠。
+- `end_rivalry` 受「宣布宿敌后十年内不能结束」的游戏规则限制，尚未实机验证。
 
-### 日常 MCP 顺序
+## 更多文档
 
-1. `campaign_status()` 查看当前检查点、存档日期、会话历史和未决命令。
-2. `request_observation()` 读取本次会话的新状态。第一个成功的新观察会确认确实载入了当前检查点；身份、日期或玩法状态不符时拒绝后续写入。
-3. 用精确工具操作具体对象；每项都核对新状态中的真实后置条件，不把日志 ACK 当作成功。
-4. 中途 `checkpoint_campaign()` 保存新检查点并继续保持暂停。
-5. 结束前显式调用 `save_and_close()`，确认返回 `saved_and_closed` 且 `owned_process_closed:true`，再断开 MCP。
-6. 下次连接同一目录，加载 manifest 指向的最新检查点。
+完整工具清单、参数和逐项实机状态见 [docs/usage-4.5.2.md](docs/usage-4.5.2.md)。附加已运行游戏的连接细节见 [docs/attach-existing.md](docs/attach-existing.md)。
 
-断开 MCP 时的自动保存只是尽力而为；客户端可能在数秒内强杀服务，不能保证断开本身完成保存。保存失败会保留正在运行的游戏并记录 `save_failed`，由用户通过游戏自身界面人工挽救；程序不会自动重试或猜测进程。
-
-### `--reload-proof` 与生产退出
-
-`--reload-proof` 是可选参数，但生产退出需要它：报告必须是针对**当前游戏构建、当前战役**的真实两轮重载实验，包含 EXE hash、版本、国家、两轮保存/关闭/重载状态 hash 和清理结果。没有报告时仍可创建并保留解析检查点，但 `save_and_close()` 会拒绝关闭游戏（游戏保持暂停）。仓库不附带该报告或生成它的研究实验脚本；干净 clone 首次使用通常只能保存检查点后人工退出，或自行按相同口径完成两轮重载实验。指定无效报告会在创建会话和启动游戏之前直接拒绝。
-
-### 可选知识库
-
-`--knowledge-bundle` 指向本地 `GameKnowledge` JSON（默认尝试仓库相对路径 `artifacts/qs-game-knowledge.json`，不存在则不启用知识工具）。知识库包含本机游戏定义与本地化编译结果，体积较大，**不随仓库分发**；请放在 git 忽略的位置或 `artifacts/` 下且不要提交。资料只用于检索建筑、区划、科技、飞升、传统、内阁、舰船、经济、外交和危机等定义，不会授予任何游戏操作权限。官方 Wiki 与灰机 Wiki 正文当前未导入（0 条），不能宣称已抓取网站全部正文。
-
-## 精确控制接口
-
-默认授权（不加 `--extended`）只有原有实机证据的四个原生操作，以及两种固定舰队订单：
-
-- `select_research`、`queue_district`、`queue_building`、`set_paused`；
-- `issue_order` 的 `fleet_wait` 与 `fleet_orbit`。
-
-加 `--extended` 后额外开放升级、拆除、转区、取消建设、普通/殖民造舰、勘察、建站、殖民、跨系统移动和停止订单。4.5.2 附加模式下还开放政策/法令、物种权利、恒星基地模块与建筑、陆军招募、事件选项和外交工具；用法与逐项实机状态见 [4.5.2 使用说明](docs/usage-4.5.2.md)。接口存在不等于全部实机通过；逐项范围见 [MCP 逐项指挥](docs/direct-control.md)。所有工具都执行本地授权、所有权、可观察性、暂停和真实后置条件检查；模型不能选择进程、DLL、函数地址、路径、原始脚本或执行代码。
-
-原只读 MCP 入口仍可用，只暴露 `observe_empire`、`list_actions`、`plan_action` 和 `status`，全部只读：
-
-```json
-{"mcpServers":{"stellaris":{"command":"<repo>\\.venv\\Scripts\\stellaris-autopilot.exe","args":["mcp","--config","<repo>\\config.local.json"]}}}
-```
-
-旧的 Windows 输入路径（`calibrate`/`run --live`）使用 `PyAutoGUI` 和本机宏坐标，需要单独安装 `windows` 额外依赖并按本机分辨率校准；示例坐标一律是占位。它和精确 MCP 是两套入口，不能把一套的验证结果套到另一套。
-
-## 其他常用命令
-
-```powershell
-uv run stellaris-autopilot inspect "<你的存档>.sav"
-uv run stellaris-autopilot install-mod --mod-dir "$env:USERPROFILE\Documents\Paradox Interactive\Stellaris\mod"
-uv run pytest -q
-uv run --all-extras ruff check src tests scripts
-```
-
-Mod 安装命令不会覆盖已有 Mod；安装后需在 Paradox Launcher 播放集中启用。动作完成需要新存档；日志 ACK、文件存在和发送按键成功都不算验证。状态区分 `dry_run`、`waiting`、`blocked`、`dispatched`、`verified`、`unverified`，未决操作保留到人工核对，不自动重发。
-
-## 目录结构
-
-```text
-scripts/serve_existing_game.py  附加已运行游戏 MCP 启动器（推荐日常入口）
-scripts/serve_campaign.py   持久战役 MCP 启动器（保留）
-src/stellaris_autopilot/
-  attached_process.py / attached_runtime.py  只读附加、会话初始化、检查点与断开
-  direct.py / direct_mcp.py     精确 MCP 工具与本地授权
-  campaign.py / campaign_runtime.py  不可变检查点、会话、保存与重载门禁
-  native.py / native_*.js       固定构建的原生科研、建设、舰队命令适配
-  pdx.py / saves.py             文本/ZIP 存档解析与玩家视角
-  observe.py / planner.py       快照、规则/LLM 规划
-  config.py / engine.py / journal.py  授权、执行闭环与持久日志
-  windows.py / mcp_server.py / cli.py  Windows 输入、只读 MCP、命令行
-mod/                          PDXScript 模板
-tests/                        解析、故障注入、模拟输入、MCP/CLI 测试
-```
-
-## 验证与限制
-
-2026-11-02 的 Windows 实机验收构建为 `Cygnus v4.5.2 (9776)`；完整回归为 **1628 passed, 3 skipped**，`ruff check src tests`、`git diff --check`、wheel/sdist 构建与包内文件核对通过。实机证据来自隔离测试副本：`keyboard_mouse_input=false`、`native_ai_takeover=false`，不是对用户持久战役的操作。验收报告和证据记录不随源码分发（测试源码随 sdist 提供）；详见 [验证记录](docs/validation.md)。
-
-当前明确未覆盖：全部 DLC/起源/特殊建筑与舰种、完整殖民发展、完整战斗与外交、任意版本二进制存档格式、客户端强杀/断电下的保存保证、远端 CI。固定版本或 EXE 哈希不匹配时，原生控制会被拒绝，只保留观察/规划等离线能力。研究结论、许可证与参考项目审查见 [docs/research.md](docs/research.md)。
+本仓库只包含源码、Mod 模板和测试，不附带游戏本体、知识 JSON、真实存档或本机 MCP 配置。许可证为 MIT。

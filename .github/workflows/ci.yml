@@ -43,12 +43,12 @@ jobs:
           with ZipFile(wheel) as archive:
               files = set(archive.namelist())
           required = (
-              "/share/stellaris-ai-autopilot/mod/descriptor.mod",
-              "/share/stellaris-ai-autopilot/mod/events/saa_events.txt",
-              "/share/stellaris-ai-autopilot/mod/common/on_actions/saa_on_actions.txt",
-              "/share/stellaris-ai-autopilot/mod/common/scripted_effects/saa_effects.txt",
-              "/share/stellaris-ai-autopilot/mod/localisation/english/saa_l_english.yml",
-              "/share/stellaris-ai-autopilot/mod/localisation/simp_chinese/saa_l_simp_chinese.yml",
+              "/share/stellar-ai-helm/mod/descriptor.mod",
+              "/share/stellar-ai-helm/mod/events/saa_events.txt",
+              "/share/stellar-ai-helm/mod/common/on_actions/saa_on_actions.txt",
+              "/share/stellar-ai-helm/mod/common/scripted_effects/saa_effects.txt",
+              "/share/stellar-ai-helm/mod/localisation/english/saa_l_english.yml",
+              "/share/stellar-ai-helm/mod/localisation/simp_chinese/saa_l_simp_chinese.yml",
           )
           for suffix in required:
               assert any(name.endswith(suffix) for name in files), suffix

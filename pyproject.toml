@@ -3,13 +3,17 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "stellaris-ai-autopilot"
+name = "stellar-ai-helm"
 version = "0.1.0"
-description = "Observable single-player Stellaris automation with a Windows execution bridge"
+description = "MCP server that drives Stellaris 4.5.2 through the game's native command paths while the game is running"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/qewewDA/stellar-ai-helm"
+Repository = "https://github.com/qewewDA/stellar-ai-helm"
 
 [project.optional-dependencies]
 windows = ["PyAutoGUI==0.9.54; sys_platform == 'win32'"]
@@ -19,6 +23,7 @@ native = ["frida==17.9.4; sys_platform == 'win32'"]
 
 [project.scripts]
 stellaris-autopilot = "stellaris_autopilot.cli:main"
+stellar-ai-helm = "stellaris_autopilot.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -27,12 +32,12 @@ where = ["src"]
 stellaris_autopilot = ["native*.js"]
 
 [tool.setuptools.data-files]
-"share/stellaris-ai-autopilot/mod" = ["mod/stellaris_ai_autopilot/descriptor.mod"]
-"share/stellaris-ai-autopilot/mod/events" = ["mod/stellaris_ai_autopilot/events/*.txt"]
-"share/stellaris-ai-autopilot/mod/common/on_actions" = ["mod/stellaris_ai_autopilot/common/on_actions/*.txt"]
-"share/stellaris-ai-autopilot/mod/common/scripted_effects" = ["mod/stellaris_ai_autopilot/common/scripted_effects/*.txt"]
-"share/stellaris-ai-autopilot/mod/localisation/english" = ["mod/stellaris_ai_autopilot/localisation/english/*.yml"]
-"share/stellaris-ai-autopilot/mod/localisation/simp_chinese" = ["mod/stellaris_ai_autopilot/localisation/simp_chinese/*.yml"]
+"share/stellar-ai-helm/mod" = ["mod/stellaris_ai_autopilot/descriptor.mod"]
+"share/stellar-ai-helm/mod/events" = ["mod/stellaris_ai_autopilot/events/*.txt"]
+"share/stellar-ai-helm/mod/common/on_actions" = ["mod/stellaris_ai_autopilot/common/on_actions/*.txt"]
+"share/stellar-ai-helm/mod/common/scripted_effects" = ["mod/stellaris_ai_autopilot/common/scripted_effects/*.txt"]
+"share/stellar-ai-helm/mod/localisation/english" = ["mod/stellaris_ai_autopilot/localisation/english/*.yml"]
+"share/stellar-ai-helm/mod/localisation/simp_chinese" = ["mod/stellaris_ai_autopilot/localisation/simp_chinese/*.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

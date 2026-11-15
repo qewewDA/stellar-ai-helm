@@ -14,17 +14,17 @@ def isolated_wheel_layout(tmp_path, monkeypatch, *, include_mod):
     # uv can load Python modules from its cache while sys.prefix points at a
     # separate temporary environment. The wheel RECORD locates its data files.
     site = tmp_path / "cache" / "Lib" / "site-packages"
-    info = site / "stellaris_ai_autopilot-0.1.0.dist-info"
+    info = site / "stellar_ai_helm-0.1.0.dist-info"
     info.mkdir(parents=True)
     (info / "METADATA").write_text(
-        "Metadata-Version: 2.4\nName: stellaris-ai-autopilot\nVersion: 0.1.0\n",
+        "Metadata-Version: 2.4\nName: stellar-ai-helm\nVersion: 0.1.0\n",
         encoding="utf-8",
     )
     (info / "RECORD").write_text(
-        "../../share/stellaris-ai-autopilot/mod/descriptor.mod,,\n",
+        "../../share/stellar-ai-helm/mod/descriptor.mod,,\n",
         encoding="utf-8",
     )
-    resources = tmp_path / "cache" / "share" / "stellaris-ai-autopilot" / "mod"
+    resources = tmp_path / "cache" / "share" / "stellar-ai-helm" / "mod"
     if include_mod:
         shutil.copytree(MOD, resources)
     monkeypatch.syspath_prepend(str(site))

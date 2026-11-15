@@ -1,6 +1,6 @@
 # Stellaris AI Autopilot 交接文档
 
-交接日期：2026-10-31。仓库：`qewewDA/qs`，工作目录 `/workspace/qs`，包名 `stellaris-ai-autopilot`，当前未发布版本 `0.1.0`。
+交接日期：2026-10-31。仓库：`qewewDA/stellar-ai-helm`，工作目录 `/workspace/qs`，包名 `stellar-ai-helm`，当前未发布版本 `0.1.0`。
 
 ## 1. 用户目标与当前进度
 
@@ -154,6 +154,6 @@ LLM 配置变量为 `AUTOPILOT_LLM_BASE_URL`、`AUTOPILOT_LLM_MODEL`、按需设
 
 ## 8. 提交与分发注意
 
-初始交接时尚未 commit、push 或发布；用户随后明确授权将源码同步到 GitHub `qewewDA/qs` 的 `main`。后续接手时以 `git status --short`、`git log` 和远程分支为准，不要用本文的初始阶段记录判断当前提交状态，也不要清除未提交的本地工作。`.venv`、`.autopilot`、`.sav` 存档、数据库、本地配置及 `dist` 均被忽略，不应提交凭据或个人游戏数据。
+初始交接时尚未 commit、push 或发布；用户随后明确授权将源码同步到 GitHub `qewewDA/stellar-ai-helm` 的 `main`。后续接手时以 `git status --short`、`git log` 和远程分支为准，不要用本文的初始阶段记录判断当前提交状态，也不要清除未提交的本地工作。`.venv`、`.autopilot`、`.sav` 存档、数据库、本地配置及 `dist` 均被忽略，不应提交凭据或个人游戏数据。
 
-`uv build` 生成 `dist/stellaris_ai_autopilot-0.1.0-py3-none-any.whl` 和源码 tarball，包含 Mod 及本地化；源包通过 `MANIFEST.in` 包含文档、示例和 lockfile。每次代码更新后重新构建并用独立环境安装验证。本次 GitHub 源码同步不包含 PyPI、Steam Workshop 或 GitHub Release 发布，也不会把忽略的安装包强行加入源码提交。
+`uv build` 生成 `dist/stellar_ai_helm-0.1.0-py3-none-any.whl` 和源码 tarball，包含 Mod 及本地化；源包通过 `MANIFEST.in` 包含文档、示例和 lockfile。每次代码更新后重新构建并用独立环境安装验证。本次 GitHub 源码同步不包含 PyPI、Steam Workshop 或 GitHub Release 发布，也不会把忽略的安装包强行加入源码提交。

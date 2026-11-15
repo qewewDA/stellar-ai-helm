@@ -945,7 +945,7 @@ wheels = [
 ]
 
 [[package]]
-name = "stellaris-ai-autopilot"
+name = "stellar-ai-helm"
 version = "0.1.0"
 source = { editable = "." }
 
