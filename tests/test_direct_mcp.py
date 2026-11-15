@@ -985,3 +985,18 @@ def test_test_setup_postconditions_are_exact():
     partial["empire_build"]["traditions"] = {"known": True, "value": ["tr_mercantile_adopt"]}
     assert not direct._test_setup_verified("test_setup_mercantile", base, partial)
     assert not direct._test_setup_verified("unknown_setup", base, adopted)
+
+
+def test_goodwill_setup_requires_the_modifier_on_both_sides_of_every_contacted_regular_empire():
+    def state(mod_ours, mod_theirs, extra=None):
+        by = {"5": {"country_type": "default", "communications": True,
+                    "relation": [["trust", "0"]] + ([["modifier", [["modifier", "opinion_liberated_us"]]]] if mod_ours else []),
+                    "their_side": {"modifiers": ["opinion_liberated_us"] if mod_theirs else []}},
+              "8": {"country_type": "swarm", "communications": False, "relation": [], "their_side": {}}}
+        if extra:
+            by["8"] = extra
+        return {"date": "2200.04.03", "country_id": "0", "diplomacy": {"known": True, "by_country": by}}
+    before = state(False, False)
+    assert direct._test_setup_verified("test_setup_goodwill", before, state(True, True))
+    assert not direct._test_setup_verified("test_setup_goodwill", before, state(True, False))
+    assert not direct._test_setup_verified("test_setup_goodwill", before, state(True, True, {"country_type": "swarm"}))

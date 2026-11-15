@@ -24,7 +24,7 @@ from pydantic import Field, StrictBool, StrictInt
 
 from .direct import (
     TEST_CONTACT_ACTION, TEST_EVENT_ACTION, TEST_EVENT_ID, TEST_MERCANTILE_ACTION, TEST_MERCANTILE_TRADITIONS,
-    TEST_RESOURCE_GRANT, TEST_RESOURCES_ACTION, TEST_SETUP_ACTIONS, TEST_STARHOLD_ACTION, DirectConfig, atomic_publish, disarm_inbox, load_direct_config,
+    TEST_GOODWILL_ACTION, TEST_GOODWILL_MODIFIER, TEST_RESOURCE_GRANT, TEST_RESOURCES_ACTION, TEST_SETUP_ACTIONS, TEST_STARHOLD_ACTION, DirectConfig, atomic_publish, disarm_inbox, load_direct_config,
     publish_observation, publish_order, publish_pause_verification,
 )
 from .direct_observe import DirectObserver
@@ -147,6 +147,18 @@ def _test_setup_verified(action_id: str, before: dict, after: dict) -> bool:
         changed = [key for key in old["by_id"] if old["by_id"][key] != new["by_id"][key]]
         return (len(changed) == 1 and old["by_id"][changed[0]].get("level") == "starbase_level_starport"
                 and new["by_id"][changed[0]] == {**old["by_id"][changed[0]], "level": "starbase_level_starhold"})
+    if action_id == TEST_GOODWILL_ACTION:
+        old, new = before.get("diplomacy"), after.get("diplomacy")
+        if not (isinstance(old, dict) and isinstance(new, dict) and old.get("known") is True and new.get("known") is True
+                and set(old["by_country"]) == set(new["by_country"])):
+            return False
+        targets = [key for key, value in old["by_country"].items()
+                   if value.get("country_type") == "default" and value.get("communications") is True]
+        return bool(targets) and all(
+            TEST_GOODWILL_MODIFIER in _strings(new["by_country"][key].get("relation"))
+            and TEST_GOODWILL_MODIFIER in _strings(new["by_country"][key].get("their_side"))
+            for key in targets) and all(
+            new["by_country"][key] == value for key, value in old["by_country"].items() if key not in targets)
     if action_id == TEST_MERCANTILE_ACTION:
         new = (after.get("empire_build") or {}).get("traditions") or {}
         old = (before.get("empire_build") or {}).get("traditions") or {}
@@ -1450,6 +1462,8 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
             TEST_CONTACT_ACTION: "Test save only (launcher flag): establish communications with one AI regular "
                                  "empire we have none with (vanilla establish_communications_no_message)",
             TEST_RESOURCES_ACTION: "Test save only (launcher flag): add a fixed resource grant for test setup",
+            TEST_GOODWILL_ACTION: "Test save only (launcher flag): mutual +50 trust and a +200 opinion modifier with every "
+                                  "AI regular empire in communication with us",
             TEST_STARHOLD_ACTION: "Test save only (launcher flag): upgrade the capital system's starport to a starhold",
             TEST_MERCANTILE_ACTION: "Test save only (launcher flag): add the Mercantile adopt and Adaptive Economic "
                                     "Policies traditions (unlocks trade policies) for test setup",

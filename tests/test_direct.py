@@ -358,10 +358,12 @@ def test_test_contact_action_requires_authorization_and_renders_only_the_fixed_e
                              "consumer_goods = 1000 influence = 400 unity = 3000 }"),
     ("test_setup_starhold", "capital_scope = { solar_system = { starbase = { set_starbase_size = starbase_starhold } } }"),
     ("test_setup_mercantile", "add_tradition = tr_mercantile_adopt add_tradition = tr_mercantile_adaptive_economic_policies"),
+    ("test_setup_goodwill", "add_trust = { who = prev amount = 50 } add_opinion_modifier = { who = prev modifier = "
+                            "opinion_liberated_us } prev = { add_trust = { who = prev amount = 50 }"),
 ])
 def test_test_setup_actions_require_authorization_and_render_only_their_fixed_effect(config, action_id, expected):
     with pytest.raises(ValueError, match="not locally authorized"):
         atomic_publish(config, TOKEN, action_id=action_id)
     script = render_action(replace(config, allowed_actions=(action_id,)), action_id, TOKEN)
-    assert expected in script and script.count("every_playable_country") == 1
+    assert expected in script and script.count("has_country_flag = qs_direct_session_") == 2
     assert "is_ai = no" in script and f"SAA_DIRECT|{action_id}|" in script

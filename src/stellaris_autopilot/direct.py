@@ -53,7 +53,9 @@ TEST_RESOURCE_GRANT = {"energy": 3000.0, "minerals": 3000.0, "alloys": 3000.0, "
 TEST_STARHOLD_ACTION = "test_setup_starhold"
 TEST_MERCANTILE_ACTION = "test_setup_mercantile"
 TEST_MERCANTILE_TRADITIONS = ("tr_mercantile_adopt", "tr_mercantile_adaptive_economic_policies")
-TEST_SETUP_ACTIONS = (TEST_RESOURCES_ACTION, TEST_STARHOLD_ACTION, TEST_MERCANTILE_ACTION)
+TEST_GOODWILL_ACTION = "test_setup_goodwill"
+TEST_GOODWILL_MODIFIER = "opinion_liberated_us"
+TEST_SETUP_ACTIONS = (TEST_RESOURCES_ACTION, TEST_STARHOLD_ACTION, TEST_MERCANTILE_ACTION, TEST_GOODWILL_ACTION)
 TEST_ACTIONS = (TEST_EVENT_ACTION, TEST_CONTACT_ACTION, *TEST_SETUP_ACTIONS)
 _ACTIONS = frozenset({PROBE_ACTION, HOLD_ACTION, *TEST_ACTIONS})
 ORDER_KINDS = frozenset({"fleet_wait", "fleet_orbit", "fleet_move", "fleet_stop"})
@@ -272,6 +274,14 @@ def render_action(config: DirectConfig, action_id: str, token: str) -> str:
         orders = "add_resource = { " + " ".join(f"{key} = {int(value)}" for key, value in TEST_RESOURCE_GRANT.items()) + " } "
     elif action_id == TEST_STARHOLD_ACTION:
         orders = "capital_scope = { solar_system = { starbase = { set_starbase_size = starbase_starhold } } } "
+    elif action_id == TEST_GOODWILL_ACTION:
+        # Mutual trust and opinion with every AI regular empire in communication with us.
+        orders = ("every_playable_country = { limit = { is_country_type = default is_ai = yes "
+                  "has_communications = prev } "
+                  "add_trust = { who = prev amount = 50 } "
+                  f"add_opinion_modifier = {{ who = prev modifier = {TEST_GOODWILL_MODIFIER} }} "
+                  "prev = { add_trust = { who = prev amount = 50 } "
+                  f"add_opinion_modifier = {{ who = prev modifier = {TEST_GOODWILL_MODIFIER} }} }} }} ")
     elif action_id == TEST_MERCANTILE_ACTION:
         orders = "".join(f"add_tradition = {key} " for key in TEST_MERCANTILE_TRADITIONS)
     return (
