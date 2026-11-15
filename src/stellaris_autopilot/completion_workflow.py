@@ -105,11 +105,12 @@ class CompletionWorkflow:
 
     def cancel(self, request_id):
         request_identifier(request_id)
+        result = self.store.cancel(request_id)
         with self._lock:
             active = self._active.get(request_id)
             if active is not None:
                 active[1].set()
-        return self.store.cancel(request_id)
+        return result
 
     async def result(self, request_id: str, wait_seconds: int = 0) -> dict:
         request_identifier(request_id)

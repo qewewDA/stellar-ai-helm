@@ -468,16 +468,19 @@ class CampaignStore:
         self._latest_identity_cache = None
 
     def _path(self, relative: str) -> Path:
-        path = self.root / relative
-        if not isinstance(relative, str) or Path(relative).is_absolute() or path.resolve().parent == path.resolve():
+        if not isinstance(relative, str) or Path(relative).is_absolute():
             raise CampaignError("Invalid campaign-owned relative path")
-        if not path.resolve().is_relative_to(self.root):
-            raise CampaignError("Campaign path escapes its owned directory")
+        path = self.root / relative
         for part in (path, *path.parents):
             if part == self.root:
                 break
             if part.is_symlink():
                 raise CampaignError("Campaign-owned paths cannot be symbolic links")
+        resolved = path.resolve()
+        if resolved.parent == resolved:
+            raise CampaignError("Invalid campaign-owned relative path")
+        if not resolved.is_relative_to(self.root):
+            raise CampaignError("Campaign path escapes its owned directory")
         return path
 
     @contextmanager

@@ -1,8 +1,6 @@
 """Fast-mode journal transitions and deferred positive postconditions."""
 import json
 
-import pytest
-
 from stellaris_autopilot.deferred_verification import evaluate_effect, settle_accepted
 from stellaris_autopilot.journal import Journal
 from stellaris_autopilot.write_mode import use_verification, reset_verification, verification_required

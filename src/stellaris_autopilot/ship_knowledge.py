@@ -10,7 +10,6 @@ import hashlib
 import io
 import re
 from pathlib import Path
-from typing import Any
 
 
 _NUMERIC = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")

@@ -642,7 +642,6 @@ def _shape_rights(state, bundle, index, queried, skipped):
     if not isinstance(rights, dict) or rights.get("known") is not True:
         return {"known": False}
     entries = []
-    primary = (rights.get("entries") or {}).get("primary") if isinstance(rights.get("entries"), dict) else None
     known_by_category = {}
     for record in _records(bundle, "species_rights"):
         ident = _id_of(record)

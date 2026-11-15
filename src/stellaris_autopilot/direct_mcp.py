@@ -46,7 +46,7 @@ from .knowledge import GameKnowledge
 from .ship_commands import ship_request
 from .colony_ships import colony_ship_request
 from .planet_commands import planet_request
-from .country_commands import country_request, definition_from_record, list_policies as policy_listing
+from .country_commands import country_request, definition_from_record
 from .control_commands import control_request
 from .diplomacy_commands import PROPOSALS, ResolvedDiplomacyCommand, diplomacy_request, proposal_outcome
 from .starbase_commands import starbase_request
@@ -54,9 +54,8 @@ from .army_commands import army_request, starbase_army_planets
 from .claim_commands import claim_request
 from .war_commands import war_request
 from .ship_design_commands import ship_design_request
-from .species_rights_commands import CATEGORIES as SPECIES_RIGHT_CATEGORIES, category_of, species_right_request
-from .decision_commands import (ResolvedDecisionCommand, decision_definition, decision_outcome, decision_request,
-                                list_planet_decisions as planet_decision_listing)
+from .species_rights_commands import species_right_request
+from .decision_commands import (ResolvedDecisionCommand, decision_definition, decision_outcome, decision_request)
 from .intent_plan import propose_plan
 from .event_commands import (EventCatalog, ResolvedEventCommand, describe_pending_events, event_request,
                              observed_effects)
