@@ -501,3 +501,9 @@ def test_test_event_authorization_is_passed_only_when_the_launcher_flag_is_set(t
     flagged = ExistingGameSession(tmp_path / "game", tmp_path / "flagged", test_events=True)
     assert flagged.connect_game()["status"] == "connected"
     assert seen == [None, True]
+
+
+def test_session_forwards_has_accepted_operations():
+    from stellaris_autopilot.existing_session import _METHODS
+    assert "has_accepted_operations" in _METHODS
+

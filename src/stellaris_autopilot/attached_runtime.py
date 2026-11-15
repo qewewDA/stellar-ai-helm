@@ -9,7 +9,7 @@ import time
 import uuid
 
 from .attached_process import attach_game
-from .campaign import CampaignError, _atomic, package_dump
+from .campaign import CampaignError, _atomic, last_package_timings, package_dump
 from .connection_cancel import check_cancelled
 from .connection_diagnostics import ConnectionPreflightError, check_connection_preflight
 from .direct import (NATIVE_ACTIONS, ORDER_KINDS, OWNERSHIP_HEADER, TEST_ACTIONS, DirectConfig,
@@ -74,6 +74,12 @@ class AttachedRuntime:
         self._phase_started = time.monotonic()
         self._current_phase = None
         self._phase_timings = list(prior_phases or [])
+
+    def _package_cache_dir(self) -> Path:
+        """Persist packaged dumps across session folders under the same state root."""
+        if self.state_dir.parent.name == "sessions":
+            return self.state_dir.parent.parent / "package-cache"
+        return self.state_dir / "package-cache"
 
     def _close_phase(self):
         now = time.monotonic()
@@ -151,6 +157,8 @@ class AttachedRuntime:
         attempted: set[tuple] = set()
         fresh_seen = False
         last_error = None
+        wait_started = time.monotonic()
+        parse_seconds = 0.0
         while time.monotonic() < deadline:
             check_cancelled(self._cancel_event, "read_current_save")
             if self.process.poll() is not None:
@@ -165,12 +173,19 @@ class AttachedRuntime:
                 if signature == previous and signature not in attempted:
                     attempted.add(signature)
                     try:
+                        parse_started = time.monotonic()
                         observed = observer.read_identity() if targeted else observer.read()
+                        parse_seconds += time.monotonic() - parse_started
                     except ValueError as exc:
                         last_error = exc
                     else:
                         check_cancelled(self._cancel_event, "read_current_save")
                         if observed.modified_at >= started:
+                            self._last_dump_timings = {
+                                "targeted": targeted,
+                                "parse_seconds": round(parse_seconds, 3),
+                                "wait_seconds": round(time.monotonic() - wait_started - parse_seconds, 3),
+                            }
                             return observed, result
             previous = signature
             time.sleep(0.2)
@@ -206,11 +221,14 @@ class AttachedRuntime:
                  "game_dump_requested": False, "gameplay_commands_sent": 0},
                 "Pause the intended loaded save. After the user confirms it is paused, call connect_game(retry=true) once.")
         self._phase("read_current_save")
-        # Identity gates need only a targeted extraction; the backup below
-        # still fully parses and verifies these exact bytes. When bind already
-        # confirmed the game is paused and a parseable dump is already on disk,
-        # reuse it instead of requesting a redundant first dump. Session flags
-        # still require the post-event dump below.
+        # Identity gates need only a targeted extraction. The backup packs
+        # these exact bytes with a targeted metadata extract (or a digest
+        # cache hit) and a decompress equality check; it no longer runs a
+        # full galaxy normalization. When bind already confirmed the game is
+        # paused and a parseable dump is already on disk, reuse it instead of
+        # requesting a redundant first dump. Session flags still require the
+        # post-event dump below, which fully parses so the first observe can
+        # reuse that normalized state.
         observed, receipt = self._existing_identity()
         if observed is None:
             observed, receipt = self._fresh_identity()
@@ -233,7 +251,8 @@ class AttachedRuntime:
         # Preserve the live state before loading any session-specific bridge definitions.
         self._phase("backup_current_save")
         package_dump(self.user_dir / "save games" / "dump_qs_direct.sav.txt",
-                     self.state_dir / "before-attachment.sav", "0", expected_digest=observed.digest)
+                     self.state_dir / "before-attachment.sav", "0", expected_digest=observed.digest,
+                     package_cache=self._package_cache_dir())
         self._phase("prepare_session")
         config = DirectConfig(
             user_dir=self.user_dir, state_dir=self.state_dir, country_id="0", campaign_id=meta["campaign_id"],
@@ -305,6 +324,8 @@ class AttachedRuntime:
         self._close_phase()
         self.initial_summary["connect_phases"] = list(self._phase_timings)
         self.initial_summary["connect_seconds"] = round(time.monotonic() - self._connect_t0, 3)
+        self.initial_summary["package_timings"] = last_package_timings()
+        self.initial_summary["verify_dump_timings"] = dict(getattr(self, "_last_dump_timings", {}) or {})
         self._deadline, self._progress, self._cancel_event = None, None, None
         return self
 

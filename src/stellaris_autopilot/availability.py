@@ -14,6 +14,10 @@ from .species_rights_commands import CATEGORIES as SPECIES_CATEGORIES, category_
 AVAILABILITY_LIMIT = 3000  # total per observation, sent in native batches of 500
 NATIVE_BATCH = 500
 GENERIC_REASON = "Normal native command validation rejected"
+# War goals and starbase slots are numerous and rarely needed in the first
+# brief. Defer them so later observes can stay cached and under a second.
+FIRST_OBSERVE_DEFER = frozenset({"war_goals", "starbases"})
+DEFER_REASON = "Deferred from the first brief; fill later if those groups are needed"
 
 
 def _records(bundle, category: str) -> list[dict]:
@@ -215,10 +219,12 @@ def _active_modifiers(state: dict, planet_id: str):
     return names if isinstance(names, list) else None
 
 
-def build_candidates(state: dict, bundle: dict, *, limit: int = AVAILABILITY_LIMIT) -> tuple[list[dict], dict]:
+def build_candidates(state: dict, bundle: dict, *, limit: int = AVAILABILITY_LIMIT,
+                     defer: frozenset[str] | set[str] | tuple[str, ...] | None = None) -> tuple[list[dict], dict]:
     """Typed native candidates plus bookkeeping for groups that could not be queued."""
     candidates: list[dict] = []
     skipped: dict[str, str] = {}
+    deferred = set(defer or ())
 
     def add(item: dict) -> bool:
         if len(candidates) >= limit:
@@ -361,22 +367,27 @@ def build_candidates(state: dict, bundle: dict, *, limit: int = AVAILABILITY_LIM
                         return candidates, skipped
 
     # War goals against observed contacts (not self)
-    contacts = _contact_ids(state)
-    goals = [_id_of(r) for r in _records(bundle, "war_goals") if _id_of(r)]
-    if not contacts:
-        skipped["war_goals"] = "No contacted empires were observed"
-    elif not goals:
-        skipped["war_goals"] = "War goal definitions are not in the knowledge bundle"
+    if "war_goals" in deferred:
+        skipped["war_goals"] = DEFER_REASON
     else:
-        for country_id in contacts:
-            for goal in goals:
-                if not add({"kind": "declare_war", "target_country_id": country_id, "war_goal": goal}):
-                    skipped.setdefault("truncated", "Availability query reached the candidate limit")
-                    return candidates, skipped
+        contacts = _contact_ids(state)
+        goals = [_id_of(r) for r in _records(bundle, "war_goals") if _id_of(r)]
+        if not contacts:
+            skipped["war_goals"] = "No contacted empires were observed"
+        elif not goals:
+            skipped["war_goals"] = "War goal definitions are not in the knowledge bundle"
+        else:
+            for country_id in contacts:
+                for goal in goals:
+                    if not add({"kind": "declare_war", "target_country_id": country_id, "war_goal": goal}):
+                        skipped.setdefault("truncated", "Availability query reached the candidate limit")
+                        return candidates, skipped
 
     # Starbase modules/buildings per observed slot
     slots = state.get("starbase_slots") if isinstance(state, dict) else None
-    if not isinstance(slots, dict) or slots.get("known") is not True:
+    if "starbases" in deferred:
+        skipped["starbases"] = DEFER_REASON
+    elif not isinstance(slots, dict) or slots.get("known") is not True:
         skipped["starbases"] = "Starbase slots are not exactly observable"
     else:
         modules = [_id_of(r) for r in _records(bundle, "starbase_modules") if _id_of(r)]

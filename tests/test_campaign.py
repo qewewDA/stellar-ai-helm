@@ -341,3 +341,37 @@ def test_symlink_checkpoint_is_rejected(tmp_path):
     (store.root / "original.sav").symlink_to(original)
     with pytest.raises(CampaignError, match="symbolic"):
         store.latest()
+
+
+def test_package_dump_uses_targeted_parse_and_reuses_digest_cache(tmp_path):
+    from stellaris_autopilot.campaign import last_package_timings
+    from stellaris_autopilot.direct_observe import clear_observation_caches, parse_stats, reset_parse_stats
+
+    clear_observation_caches()
+    reset_parse_stats()
+    path = dump(tmp_path)
+    cache = tmp_path / "package-cache"
+    first = package_dump(path, tmp_path / "a.sav", "0", package_cache=cache)
+    assert first["parse_verified"] is True
+    assert first["date"] == "2200.01.02"
+    with zipfile.ZipFile(tmp_path / "a.sav") as archive:
+        meta = archive.read("meta").decode()
+        assert 'date="2200.01.02"' in meta
+        assert '"Utopia"' in meta
+        assert 'player_portrait="human"' in meta
+        assert 'file="flag_human_9.dds"' in meta
+    stats = parse_stats()
+    assert stats.get("full_parse", 0) == 0
+    assert stats.get("targeted_parse", 0) >= 1
+    assert last_package_timings().get("cache") == "miss"
+
+    reset_parse_stats()
+    reused = package_dump(path, tmp_path / "b.sav", "0", package_cache=cache)
+    assert reused["gamestate_sha256"] == first["gamestate_sha256"]
+    assert reused["date"] == first["date"]
+    assert reused["game_version"] == first["game_version"]
+    assert parse_stats().get("full_parse", 0) == 0
+    assert parse_stats().get("targeted_parse", 0) == 0
+    assert last_package_timings().get("cache") == "hit"
+    assert (tmp_path / "a.sav").read_bytes() == (tmp_path / "b.sav").read_bytes()
+

@@ -7,6 +7,7 @@ from stellaris_autopilot.observation_view import apply_observation_view, observa
 FULL = {
     "snapshot": "abc",
     "modified_at": 1.5,
+    "observe_timings": {"total_seconds": 0.2, "availability_cached": True},
     "deferred_verification": {"pending": True, "verifications": []},
     "state": {
         "date": "2200.12.26",
@@ -53,6 +54,7 @@ def test_brief_view_keeps_planning_fields_and_omits_the_rest():
     brief = apply_observation_view(FULL, "brief")
     assert brief["snapshot"] == "abc"
     assert brief["deferred_verification"]["pending"] is True
+    assert brief["observe_timings"]["availability_cached"] is True
     state = brief["state"]
     assert state["date"] == "2200.12.26" and state["resources"] == {"energy": 1}
     assert state["wars"]["by_id"]["0"]["id"] == "0"

@@ -21,11 +21,11 @@ import time
 import uuid
 import zipfile
 
-from .direct_observe import DirectObserver, cached_state, parse_full
+from .direct_observe import DirectObserver, cached_state, count, parse_full
 from .engine import game_date
 from .observe import Observation
-from .pdx import PDXNode, without_cyclic_gc
-from .saves import SaveError, normalize_gamestate
+from .pdx import PDXError, PDXNode, loads_selected, without_cyclic_gc
+from .saves import SaveError, normalize_gamestate, normalize_identity, package_spec
 
 
 MAX_BYTES = 128 * 1024 * 1024
@@ -191,6 +191,60 @@ def _browser_metadata(root: PDXNode, country_id: str) -> dict:
     return result
 
 
+_LAST_PACKAGE_TIMINGS: dict = {}
+
+
+def last_package_timings() -> dict:
+    """Timings from the most recent package_dump call in this process."""
+    return dict(_LAST_PACKAGE_TIMINGS)
+
+
+def _decode_package(data: bytes, path: Path, country_id: str) -> tuple[PDXNode, dict]:
+    """Identity and save-browser metadata only; no galaxy-wide normalization."""
+    try:
+        root = loads_selected(data.decode("utf-8-sig"), package_spec(country_id))
+        for key in ("version", "date", "galaxy", "country"):
+            _single(root, key)
+        galaxy = _single(root, "galaxy")
+        countries = _single(root, "country")
+        if not isinstance(galaxy, PDXNode) or not isinstance(countries, PDXNode):
+            raise CampaignError("Campaign identity containers are malformed")
+        campaign_id = _single(galaxy, "name")
+        if not isinstance(campaign_id, str) or not campaign_id.strip():
+            raise CampaignError("Campaign identity is unknown")
+        if not isinstance(_single(countries, country_id), PDXNode):
+            raise CampaignError("Selected country is absent or malformed")
+        state = normalize_identity(root, path, country_id=country_id)
+        count("targeted_parse")
+        game_date(state["date"])
+        metadata = state["metadata"]
+        if metadata["player_country_ids"] != [country_id]:
+            raise CampaignError("Exactly the selected human country must be identified")
+        if metadata["ironman"] in (True, "yes") or metadata["multiplayer"] in (True, "yes"):
+            raise CampaignError("Persistent control requires non-Ironman single-player")
+        if metadata["game_version"] in (None, "", "unknown"):
+            raise CampaignError("Game version is unknown")
+        return root, state
+    except (UnicodeError, SaveError, PDXError) as exc:
+        raise CampaignError("Cannot parse the campaign checkpoint") from exc
+
+
+def _link_new(source: Path, destination: Path) -> None:
+    if destination.exists():
+        raise CampaignError("A checkpoint destination may never be overwritten")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(source, destination)
+    except OSError:
+        import shutil
+        temporary = destination.with_name(destination.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            shutil.copy2(source, temporary)
+            os.link(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def gameplay_state(state: dict) -> dict:
     """Comparable observed gameplay; bootstrap receipts and source paths differ."""
     result = {key: value for key, value in state.items() if key != "direct_bridge"}
@@ -285,20 +339,65 @@ def imported_queue_initialization(expected: dict, observed: dict) -> dict | None
         return None
 
 
-def package_dump(dump_path: Path, destination: Path, country_id: str, *, expected_digest: str | None = None) -> dict:
+def package_dump(dump_path: Path, destination: Path, country_id: str, *,
+                 expected_digest: str | None = None, package_cache: Path | None = None) -> dict:
     """Package one exact dump as ZIP meta+gamestate without modifying dump bytes.
 
     The destination must be a new local path chosen by the launcher. This only
     proves byte integrity and parseability; a real reload needs separate proof.
+    A recent identical digest in package_cache is reused after a decompress
+    equality check, so reconnects skip the targeted metadata extract and zip.
     """
+    global _LAST_PACKAGE_TIMINGS
+    timings: dict = {}
+    started = time.monotonic()
     dump_path, destination = Path(dump_path), Path(destination)
     _regular(dump_path)
+    t0 = time.monotonic()
     data, _, _ = DirectObserver(dump_path, country_id)._copy_snapshot()
+    timings["copy_seconds"] = round(time.monotonic() - t0, 3)
+    t0 = time.monotonic()
     digest = hashlib.sha256(data).hexdigest()
+    timings["sha256_seconds"] = round(time.monotonic() - t0, 3)
     if expected_digest is not None and digest != expected_digest:
         raise CampaignError("The dump changed after the verified observation")
-    root, state = _decode(data, dump_path, country_id, reuse_observation=True)
+    cache_sav = cache_json = None
+    if package_cache is not None:
+        cache_root = Path(package_cache)
+        cache_sav = cache_root / (digest + ".sav")
+        cache_json = cache_root / (digest + ".json")
+        if cache_sav.is_file() and cache_json.is_file():
+            t0 = time.monotonic()
+            try:
+                cached_meta = json.loads(cache_json.read_text(encoding="utf-8"))
+                cached_bytes = _gamestate(cache_sav)
+            except (OSError, UnicodeError, json.JSONDecodeError, CampaignError):
+                cached_meta, cached_bytes = None, None
+            timings["cache_check_seconds"] = round(time.monotonic() - t0, 3)
+            if (isinstance(cached_meta, dict) and cached_bytes == data
+                    and cached_meta.get("gamestate_sha256") == digest
+                    and cached_meta.get("country_id") == country_id
+                    and isinstance(cached_meta.get("date"), str)
+                    and cached_meta.get("game_version") not in (None, "", "unknown")):
+                _link_new(cache_sav, destination)
+                timings["cache"] = "hit"
+                timings["total_seconds"] = round(time.monotonic() - started, 3)
+                _LAST_PACKAGE_TIMINGS = timings
+                return {"date": cached_meta["date"],
+                        "campaign_id": cached_meta.get("campaign_id"),
+                        "country_id": country_id,
+                        "game_version": cached_meta["game_version"],
+                        "gamestate_sha256": digest,
+                        "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+                        "bytes": destination.stat().st_size,
+                        "parse_verified": True, "reload_verified": False}
+            timings["cache"] = "mismatch"
+        else:
+            timings["cache"] = "miss"
+    t0 = time.monotonic()
+    root, state = _decode_package(data, dump_path, country_id)
     browser = _browser_metadata(root, country_id)
+    timings["targeted_parse_seconds"] = round(time.monotonic() - t0, 3)
     if destination.exists():
         raise CampaignError("A checkpoint destination may never be overwritten")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -316,6 +415,7 @@ def package_dump(dump_path: Path, destination: Path, country_id: str, *, expecte
                 metadata.append(key + "=" + _pdx(browser[key]))
             elif fields:
                 metadata.append(key + "=" + _pdx(fields[0]))
+        t0 = time.monotonic()
         with temporary.open("xb") as stream:
             with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr("gamestate", data)
@@ -323,18 +423,34 @@ def package_dump(dump_path: Path, destination: Path, country_id: str, *, expecte
             stream.flush()
             os.fsync(stream.fileno())
         check = _gamestate(temporary)
-        # These exact bytes were already parsed above. Byte equality proves
-        # that decompression yields that same parsed state without reparsing
-        # a potentially large galaxy for a second time.
+        # Byte equality proves decompression yields the same gamestate that
+        # the targeted package extract already accepted, without a second
+        # galaxy-wide parse.
         if check != data:
             raise CampaignError("The packaged checkpoint did not verify")
+        timings["zip_seconds"] = round(time.monotonic() - t0, 3)
         # link() atomically creates a new name and refuses an existing target.
         # The temporary file and destination are on the same local filesystem.
         os.link(temporary, destination)
-        return {"date": state["date"], "campaign_id": state["metadata"]["campaign_id"],
-                "country_id": country_id, "game_version": state["metadata"]["game_version"],
-                "gamestate_sha256": digest, "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
-                "bytes": destination.stat().st_size, "parse_verified": True, "reload_verified": False}
+        packed = {"date": state["date"], "campaign_id": state["metadata"]["campaign_id"],
+                  "country_id": country_id, "game_version": state["metadata"]["game_version"],
+                  "gamestate_sha256": digest, "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+                  "bytes": destination.stat().st_size, "parse_verified": True, "reload_verified": False}
+        if cache_sav is not None and cache_json is not None:
+            Path(package_cache).mkdir(parents=True, exist_ok=True)
+            if not cache_sav.exists():
+                try:
+                    os.link(destination, cache_sav)
+                except OSError:
+                    import shutil
+                    shutil.copy2(destination, cache_sav)
+            sidecar = {key: packed[key] for key in ("date", "campaign_id", "country_id",
+                                                    "game_version", "gamestate_sha256")}
+            if not cache_json.exists():
+                cache_json.write_text(json.dumps(sidecar, ensure_ascii=False), encoding="utf-8")
+        timings["total_seconds"] = round(time.monotonic() - started, 3)
+        _LAST_PACKAGE_TIMINGS = timings
+        return packed
     finally:
         temporary.unlink(missing_ok=True)
 

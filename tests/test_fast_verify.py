@@ -267,20 +267,25 @@ def test_same_bytes_at_another_path_keep_their_own_source(tmp_path):
     assert parse_stats()["full_parse"] == 1  # one tree, two normalizations
 
 
-def test_checkpoint_packaging_reuses_the_verified_parse_of_the_same_bytes(tmp_path):
+def test_checkpoint_packaging_does_not_full_parse_already_verified_bytes(tmp_path):
     path = write(tmp_path, dump_text())
     observed = DirectObserver(path, "0").read()
     saved = package_dump(path, tmp_path / "out" / "a.sav", "0", expected_digest=observed.digest)
     assert saved["parse_verified"] is True and saved["gamestate_sha256"] == observed.digest
-    assert parse_stats()["full_parse"] == 1 and parse_stats()["root_cache_hit"] == 1
+    stats = parse_stats()
+    assert stats["full_parse"] == 1
+    assert stats.get("root_cache_hit", 0) == 0
+    assert stats.get("targeted_parse", 0) >= 1
 
 
-def test_checkpoint_packaging_still_parses_uncached_bytes_and_rejects_changes(tmp_path):
+def test_checkpoint_packaging_still_extracts_uncached_bytes_and_rejects_changes(tmp_path):
     path = write(tmp_path, dump_text())
     observed = DirectObserver(path, "0").read()
     observe_module.clear_observation_caches()
+    before = parse_stats()["full_parse"]
     package_dump(path, tmp_path / "out" / "a.sav", "0", expected_digest=observed.digest)
-    assert parse_stats()["full_parse"] == 2
+    assert parse_stats()["full_parse"] == before
+    assert parse_stats().get("targeted_parse", 0) >= 1
     write(tmp_path, dump_text(""))
     with pytest.raises(CampaignError, match="changed after the verified observation"):
         package_dump(path, tmp_path / "out" / "b.sav", "0", expected_digest=observed.digest)
@@ -487,10 +492,10 @@ def test_connect_and_checkpoint_parse_counts(tmp_path):
     runtime = AttachedRuntime(Process(), native, user, tmp_path / "state", "c" * 32)
     try:
         runtime.initialize()
-        # Identity+backup reuse the on-disk dump (targeted + one full parse);
-        # the bound session still requests one fresh full parse after events.
+        # Identity and backup both targeted-parse the on-disk dump; the bound
+        # session still requests one fresh full parse after events.
         connect = parse_stats()
-        assert connect.get("targeted_parse") == 1 and connect.get("full_parse") == 2
+        assert connect.get("targeted_parse") == 2 and connect.get("full_parse") == 1
         assert runtime.initial_summary["planet_count"] == 1
         observe_module.reset_parse_stats()
         result = runtime.checkpoint_game()
@@ -498,9 +503,10 @@ def test_connect_and_checkpoint_parse_counts(tmp_path):
         assert result["checkpoint"]["parse_verified"] is True
         # The refresh repeats the bound snapshot's bytes (cache), the pause proof
         # adds a receipt (one parse), the checkpoint dump repeats it (cache) and
-        # packaging reuses that verified tree. Every step still read a new dump.
+        # packaging targeted-extracts metadata without a second full parse.
         checkpoint = parse_stats()
-        assert checkpoint.get("full_parse") == 1 and checkpoint.get("root_cache_hit") == 1
+        assert checkpoint.get("full_parse") == 1
+        assert checkpoint.get("targeted_parse", 0) >= 1
         # Connect issues one post-event dump (the pre-existing dump is reused);
         # checkpoint still issues its own dumps.
         assert native.dumps >= 1 + 3

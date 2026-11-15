@@ -878,6 +878,28 @@ def identity_spec(country_id: str) -> dict:
     return {**IDENTITY_SPEC, 'country': {str(country_id): {'flags': True, 'name': True}}}
 
 
+def package_spec(country_id: str) -> dict:
+    """Selection for checkpoint ZIP metadata without a full galaxy normalization.
+
+    The packer needs campaign identity plus the save-browser fields a dump
+    omits at root (flag, founder portrait) and the optional meta_* counts.
+    """
+    return {
+        **IDENTITY_SPEC,
+        'required_dlcs': True,
+        'version_control_revision': True,
+        'name': True,
+        'player_portrait': True,
+        'flag': True,
+        'meta_fleets': True,
+        'meta_planets': True,
+        'species_db': True,
+        'country': {str(country_id): {
+            'flags': True, 'name': True, 'flag': True, 'founder_species_ref': True,
+        }},
+    }
+
+
 def normalize_identity(root: PDXNode, path: Path, *, country_id: str) -> dict[str, Any]:
     """Targeted counterpart of normalize_gamestate for connection validation only.
 

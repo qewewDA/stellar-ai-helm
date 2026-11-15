@@ -27,7 +27,7 @@ from .direct import (
     TEST_GOODWILL_ACTION, TEST_GOODWILL_MODIFIER, TEST_RESOURCE_GRANT, TEST_RESOURCES_ACTION, TEST_SETUP_ACTIONS, TEST_STARHOLD_ACTION, DirectConfig, atomic_publish, disarm_inbox, load_direct_config,
     publish_observation, publish_order, publish_pause_verification,
 )
-from .direct_observe import DirectObserver
+from .direct_observe import DirectObserver, parse_stats
 from .direct_orders import Order, parse_order, validate_order, verify_order
 from .engine import game_date
 from .journal import Journal
@@ -66,7 +66,7 @@ from .assistant_prompts import register_prompts
 from .action_context import current_plan_context, verified_context
 from .task_plan import PlanSteps
 from .observation_view import apply_observation_view, observation_view
-from .availability import NATIVE_BATCH, build_candidates, mark_unqueried_groups, shape_availability
+from .availability import FIRST_OBSERVE_DEFER, NATIVE_BATCH, build_candidates, mark_unqueried_groups, shape_availability
 from .task_workflow import TaskWorkflow
 from .completion_goal import CompletionIntent, TimeAuthorization
 from .completion_workflow import CompletionWorkflow
@@ -305,7 +305,8 @@ class DirectConnection:
         bundle = getattr(knowledge, "bundle", knowledge)
         return bundle if isinstance(bundle, dict) else None
 
-    def _query_availability(self, state: dict, *, config: DirectConfig) -> dict:
+    def _query_availability(self, state: dict, *, config: DirectConfig,
+                            defer: frozenset[str] | set[str] | tuple[str, ...] | None = None) -> dict:
         bundle = self._knowledge_bundle()
         unqueried = shape_availability(state, bundle or {}, None, queried=False)
         if bundle is None:
@@ -318,7 +319,7 @@ class DirectConnection:
         if not isinstance(runtime, dict) or runtime.get("paused") is not True:
             unqueried["reason"] = "The live game must still be paused before availability can be queried"
             return unqueried
-        candidates, skipped = build_candidates(state, bundle)
+        candidates, skipped = build_candidates(state, bundle, defer=defer)
         skipped = mark_unqueried_groups(candidates, skipped)
         if not candidates:
             return shape_availability(state, bundle, [], queried=True, skipped=skipped)
@@ -370,23 +371,26 @@ class DirectConnection:
         runtime = getattr(self.native_bridge, "last_runtime", None)
         return isinstance(runtime, dict) and runtime.get("paused") is True
 
-    def _attach_availability(self, result: dict, *, already_locked: bool, config: DirectConfig) -> dict:
+    def _attach_availability(self, result: dict, *, already_locked: bool, config: DirectConfig,
+                             defer: frozenset[str] | set[str] | tuple[str, ...] | None = None) -> dict:
         state = result.get("state") if isinstance(result, dict) else None
         if not isinstance(state, dict):
             return result
         digest = result.get("snapshot")
         cached = getattr(self, "_availability_cache", None)
+        cached_hit = False
         if (isinstance(cached, tuple) and len(cached) == 2 and digest and cached[0] == digest
                 and isinstance(cached[1], dict) and cached[1].get("known") is True):
             availability = cached[1]
+            cached_hit = True
         elif not already_locked and not self._can_query_availability():
-            availability = self._query_availability(state, config=config)
+            availability = self._query_availability(state, config=config, defer=defer)
         elif already_locked:
-            availability = self._query_availability(state, config=config)
+            availability = self._query_availability(state, config=config, defer=defer)
         else:
             try:
                 with _controller_lock(config):
-                    availability = self._query_availability(state, config=config)
+                    availability = self._query_availability(state, config=config, defer=defer)
             except DirectLockBusy:
                 availability = shape_availability(state, self._knowledge_bundle() or {}, None, queried=False)
                 availability["reason"] = "Another writer owns the game mailbox; availability was not queried"
@@ -394,39 +398,63 @@ class DirectConnection:
             self._availability_cache = (digest, availability)
         attached = dict(result)
         attached["state"] = {**state, "availability": availability}
+        attached["availability_cached"] = cached_hit
         return attached
 
+    def _with_observe_timings(self, result: dict, *, read_seconds: float, total_started: float,
+                              dump_seconds: float | None = None) -> dict:
+        availability = (result.get("state") or {}).get("availability") if isinstance(result, dict) else None
+        result["observe_timings"] = {
+            "read_seconds": round(read_seconds, 3),
+            "dump_seconds": None if dump_seconds is None else round(dump_seconds, 3),
+            "availability_seconds": (availability or {}).get("query_seconds") if isinstance(availability, dict) else None,
+            "availability_cached": result.pop("availability_cached", False) is True,
+            "candidates_checked": (availability or {}).get("candidates_checked") if isinstance(availability, dict) else None,
+            "total_seconds": round(time.monotonic() - total_started, 3),
+            "parse_stats": parse_stats(),
+        }
+        return result
+
     def observe(self) -> dict:
+        started = time.monotonic()
         config = _configuration(self.config_path)
+        t0 = time.monotonic()
         observation = self._read(DirectObserver(config.dump_path, config.country_id))
+        read_seconds = time.monotonic() - t0
         # Observation remains useful when stale. A write requires the full gate.
         validate_connection(config, observation, require_fresh=False)
         result = {**_public(observation), "fresh": fresh(observation, config.max_snapshot_age_seconds),
                   "capability": "experimental fixed direct actions"}
-        result = self._attach_availability(result, already_locked=False, config=config)
+        result = self._attach_availability(result, already_locked=False, config=config,
+                                           defer=FIRST_OBSERVE_DEFER)
         journal_path = config.state_dir / "journal.sqlite"
-        if not journal_path.is_file():
-            return result
-        journal = Journal(journal_path)
-        try:
-            return attach_pending_flag(result, journal)
-        finally:
-            journal.close()
-
-    def request_observation(self) -> dict:
-        config = _configuration(self.config_path)
-        with _controller_lock(config):
-            result = self._fresh_observation(config, DirectObserver(config.dump_path, config.country_id))
-            result.pop("_observation", None)
-            result = self._attach_availability(result, already_locked=True, config=config)
-            journal_path = config.state_dir / "journal.sqlite"
-            if not journal_path.is_file():
-                return result
+        if journal_path.is_file():
             journal = Journal(journal_path)
             try:
-                return settle_accepted(result, journal)
+                result = attach_pending_flag(result, journal)
             finally:
                 journal.close()
+        return self._with_observe_timings(result, read_seconds=read_seconds, total_started=started)
+
+    def request_observation(self) -> dict:
+        started = time.monotonic()
+        config = _configuration(self.config_path)
+        with _controller_lock(config):
+            t0 = time.monotonic()
+            result = self._fresh_observation(config, DirectObserver(config.dump_path, config.country_id))
+            dump_seconds = time.monotonic() - t0
+            result.pop("_observation", None)
+            result = self._attach_availability(result, already_locked=True, config=config,
+                                               defer=FIRST_OBSERVE_DEFER)
+            journal_path = config.state_dir / "journal.sqlite"
+            if journal_path.is_file():
+                journal = Journal(journal_path)
+                try:
+                    result = settle_accepted(result, journal)
+                finally:
+                    journal.close()
+            return self._with_observe_timings(result, read_seconds=0.0, total_started=started,
+                                              dump_seconds=dump_seconds)
 
     def _fresh_observation(self, config: DirectConfig, observer: DirectObserver) -> dict:
         """Request one dump and return it only once it is newer than the request.

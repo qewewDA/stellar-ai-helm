@@ -1,6 +1,7 @@
 """Availability is taken from game validator results, not static guesses."""
 from stellaris_autopilot.availability import (
-    build_candidates, shape_availability, _never, _handle, planet_identities,
+    DEFER_REASON, FIRST_OBSERVE_DEFER, build_candidates, shape_availability,
+    _never, _handle, planet_identities,
 )
 from stellaris_autopilot.observation_view import apply_observation_view
 
@@ -328,3 +329,31 @@ def test_zone_slots_list_options_per_district_slot_from_the_validator():
     brief = apply_observation_view({"snapshot": "s", "state": {**state, "availability": shaped}}, "brief")["state"]
     slots = brief["planets"][0]["zone_slots"]
     assert slots[0]["slots"][1]["available_zones"][0]["zone_id"] == "zone_industrial"
+
+
+def test_first_observe_can_defer_war_goals_and_starbases():
+    state = {
+        "planets": [{"id": "3", "name": "Earth"}],
+        "diplomacy": {"by_country": {"5": {"country": "5", "communications": True}}},
+        "starbase_slots": {"known": True, "by_id": {"1": {"modules": {"0": None}, "buildings": {}}}},
+        "country_controls": {"known": True, "policies": {}, "edicts": {}},
+    }
+    bundle = _bundle(
+        _decision("decision_ok"),
+        {"category": "war_goals", "id": "wg_conquest", "definition": {"key": "wg_conquest"}},
+        {"category": "starbase_modules", "id": "shipyard", "definition": {"key": "shipyard"}},
+    )
+    full, _ = build_candidates(state, bundle)
+    deferred, skipped = build_candidates(state, bundle, defer=FIRST_OBSERVE_DEFER)
+    assert any(item["kind"] == "declare_war" for item in full)
+    assert any(item["kind"] == "queue_starbase_module" for item in full)
+    assert not any(item["kind"] in {"declare_war", "queue_starbase_module", "queue_starbase_building"}
+                   for item in deferred)
+    assert skipped["war_goals"] == DEFER_REASON
+    assert skipped["starbases"] == DEFER_REASON
+    assert any(item["kind"] == "enact_planet_decision" for item in deferred)
+    shaped = shape_availability(state, bundle, [], queried=True, skipped=skipped)
+    assert shaped["known"] is True
+    assert shaped["war_goals"]["known"] is False and shaped["war_goals"]["reason"] == DEFER_REASON
+    assert shaped["starbases"]["known"] is False and shaped["starbases"]["reason"] == DEFER_REASON
+

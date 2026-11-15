@@ -174,7 +174,7 @@ def verified_state(token=TOKEN):
 
 
 def patch_package(monkeypatch, calls, *, fail=None, payload=None):
-    def package(dump_path, destination, country_id, *, expected_digest):
+    def package(dump_path, destination, country_id, *, expected_digest, package_cache=None):
         calls.append(SimpleNamespace(dump_path=Path(dump_path), destination=Path(destination),
                                      country_id=country_id, expected_digest=expected_digest))
         if fail is not None:

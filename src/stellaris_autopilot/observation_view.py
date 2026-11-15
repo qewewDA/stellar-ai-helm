@@ -29,7 +29,7 @@ _BRIEF_STATE = (
     "planets", "research", "pending_events", "species_rights", "policies_edicts",
     "availability",
 )
-_BRIEF_TOP = ("status", "snapshot", "modified_at", "date", "deferred_verification")
+_BRIEF_TOP = ("status", "snapshot", "modified_at", "date", "deferred_verification", "observe_timings")
 
 
 def observation_view(value: str | None) -> str:

@@ -102,9 +102,17 @@ def main():
                 session.request_observation if pending else session.observe)
             if isinstance(observed, dict) and isinstance(observed.get("state"), dict):
                 try:
-                    catalog = _event_catalog(args.game_dir, args.user_dir)()
-                    described = describe_pending_events(observed["state"], catalog)
-                    observed = {**observed, "state": {**observed["state"], "pending_events_described": described}}
+                    state = observed["state"]
+                    pending = state.get("pending_events") if isinstance(state, dict) else None
+                    country = str(state.get("country_id", "0"))
+                    by_id = pending.get("by_id") if isinstance(pending, dict) else None
+                    needs_catalog = (isinstance(pending, dict) and pending.get("known") is True
+                                     and isinstance(by_id, dict)
+                                     and any(isinstance(entry, dict) and str(entry.get("country")) == country
+                                             for entry in by_id.values()))
+                    catalog = _event_catalog(args.game_dir, args.user_dir)() if needs_catalog else None
+                    described = describe_pending_events(state, catalog)
+                    observed = {**observed, "state": {**state, "pending_events_described": described}}
                 except (OSError, ValueError):
                     pass
             return apply_observation_view(observed, "brief")
