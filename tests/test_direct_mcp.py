@@ -137,7 +137,7 @@ EXTENDED_ARGUMENTS = [
     ("upgrade_building", {"planet_id": "3", "zone_id": "4", "building_id": "17",
                           "target_building_id": "building_research_lab_2"}),
     ("demolish_building", {"planet_id": "3", "zone_id": "4", "building_id": "17"}),
-    ("convert_zone", {"planet_id": "3", "zone_id": "4", "target_zone_id": "zone_research_unity"}),
+    ("convert_zone", {"planet_id": "3", "district_id": "10", "slot_index": 2, "target_zone_id": "zone_research_unity"}),
     ("cancel_construction", {"planet_id": "3", "item_id": "31"}),
     ("survey_planet", {"fleet_id": "1", "planet_id": "104"}),
     ("build_station", {"fleet_id": "2", "planet_id": "104", "station_type": "outpost"}),

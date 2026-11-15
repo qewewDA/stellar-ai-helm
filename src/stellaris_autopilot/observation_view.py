@@ -144,6 +144,11 @@ def _brief_planets(state: dict):
                 item["buildings_rejected_without_reason"] = construction["buildings_rejected_without_reason"]
             if construction.get("known") is False:
                 item["available_construction_known"] = False
+        zones = _availability_zone_slots(state, planet_id)
+        if zones is not None:
+            item["zone_slots"] = zones.get("districts")
+            if zones.get("known") is False:
+                item["available_zones_known"] = False
         compact.append(item)
     return compact
 
@@ -359,6 +364,41 @@ def _availability_construction_planet(state: dict, planet_id: str):
             result["districts_rejected_without_reason"] = district_generic
         if building_generic:
             result["buildings_rejected_without_reason"] = building_generic
+        return result
+    return None
+
+
+def _availability_zone_slots(state: dict, planet_id: str):
+    availability = state.get("availability") if isinstance(state.get("availability"), dict) else None
+    zones = availability.get("zones") if isinstance(availability, dict) else None
+    if not isinstance(zones, dict) or not isinstance(zones.get("planets"), list):
+        return None
+    for item in zones["planets"]:
+        if not isinstance(item, dict) or str(item.get("planet_id")) != str(planet_id):
+            continue
+        districts = []
+        generic_total = 0
+        for district in item.get("districts") or []:
+            if not isinstance(district, dict):
+                continue
+            slots = []
+            for slot in district.get("slots") or []:
+                if not isinstance(slot, dict):
+                    continue
+                available, generic = _split(slot.get("available_zones") or [])
+                if generic:
+                    generic_total += generic
+                entry = {key: slot[key] for key in ("slot_index", "slot_key", "occupied", "current")
+                         if key in slot}
+                entry["available_zones"] = available
+                if generic:
+                    entry["zones_rejected_without_reason"] = generic
+                slots.append(entry)
+            districts.append({"district_id": district.get("district_id"),
+                              "district_type": district.get("district_type"), "slots": slots})
+        result = {"known": zones.get("known"), "districts": districts}
+        if generic_total:
+            result["zones_rejected_without_reason"] = generic_total
         return result
     return None
 

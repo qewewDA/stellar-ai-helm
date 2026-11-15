@@ -263,3 +263,68 @@ def test_shape_construction_keeps_enactable_reason_and_cost():
     brief = apply_observation_view(observed, "brief")["state"]
     assert brief["planets"][0]["available_districts"][0]["district_id"] == "district_city"
     assert brief["planets"][0]["available_buildings"][0]["available_buildings"][0]["reason"] == "trigger_no"
+
+
+
+def test_zone_slots_list_options_per_district_slot_from_the_validator():
+    state = {
+        "planets": [{"id": "3", "name": "Earth", "colony": 0, "build_queue": 0, "zones_known": True,
+                     "zones_by_id": {"0": {"id": "0", "district_id": "10", "district_type": "district_city",
+                                           "slot_index": 0, "type": "zone_default", "buildings_known": True,
+                                           "buildings_by_id": {}}},
+                     "zone_slots": [
+                         {"district_id": "10", "district_type": "district_city", "slots": [
+                             {"slot_index": 0, "occupied": True, "zone_id": "0", "type": "zone_default"},
+                             {"slot_index": 1, "occupied": False}]},
+                         {"district_id": "11", "district_type": "district_generator", "slots": [
+                             {"slot_index": 0, "occupied": False}]}]}],
+        "construction": {"queues_by_id": {"0": {"type": "planet", "owner": 0, "location": {"type": 2, "id": 3}}}},
+    }
+    bundle = _bundle(
+        {"category": "districts", "id": "district_city",
+         "definition": {"zone_slots": ["slot_city_government", "slot_city_01", "slot_city_02"]}},
+        {"category": "districts", "id": "district_generator", "definition": {"zone_slots": ["slot_energy"]}},
+        {"category": "zone_slots", "id": "slot_city_government",
+         "definition": {"start": "zone_default", "included_zone_sets": ["zone_default"]}},
+        {"category": "zone_slots", "id": "slot_city_01", "definition": {"included_zone_sets": ["urban"]}},
+        {"category": "zone_slots", "id": "slot_energy", "definition": {"included_zone_sets": ["energy"]}},
+        {"category": "zones", "id": "zone_default", "definition": {"zone_sets": ["default"], "max_buildings": 6}},
+        {"category": "zones", "id": "zone_industrial",
+         "definition": {"zone_sets": ["urban"], "resources": {"cost": {"minerals": 1000}}}},
+        {"category": "zones", "id": "zone_research", "definition": {"zone_sets": ["urban"]}},
+        {"category": "zones", "id": "zone_energy", "definition": {"zone_sets": ["energy"]}},
+    )
+    candidates, skipped = build_candidates(state, bundle)
+    zone_candidates = [item for item in candidates if item["kind"] == "convert_zone"]
+    targets = {(item["district_id"], item["slot_index"], item["target_zone"]) for item in zone_candidates}
+    assert ("10", 1, "zone_industrial") in targets and ("10", 1, "zone_research") in targets
+    assert ("11", 0, "zone_energy") in targets
+    assert ("11", 0, "zone_industrial") not in targets  # generator slot has its own set
+    assert not any(item["district_id"] == "10" and item["slot_index"] == 0 and item["target_zone"] == "zone_default"
+                   for item in zone_candidates)
+    assert "zones" not in skipped
+    results = [
+        {"kind": "convert_zone", "planet_id": "3", "district_id": "10", "slot_index": 1,
+         "target_zone": "zone_industrial", "allowed": True, "enactable": True, "known": True},
+        {"kind": "convert_zone", "planet_id": "3", "district_id": "10", "slot_index": 1,
+         "target_zone": "zone_research", "allowed": False, "enactable": False, "known": True, "reason": "trigger_no"},
+        {"kind": "convert_zone", "planet_id": "3", "district_id": "11", "slot_index": 0,
+         "target_zone": "zone_energy", "allowed": False, "enactable": False, "known": True,
+         "reason": "zone_unavailable_tech_power_hub_1"},
+    ]
+    shaped = shape_availability(state, bundle, results, queried=True)
+    zones = shaped["zones"]
+    assert zones["known"] is True
+    districts = {item["district_id"]: item for item in zones["planets"][0]["districts"]}
+    city_slots = {slot["slot_index"]: slot for slot in districts["10"]["slots"]}
+    assert city_slots[0]["current"]["type"] == "zone_default"
+    assert city_slots[0]["current"]["max_buildings"] == 6
+    assert city_slots[1]["occupied"] is False
+    options = {item["zone_id"]: item for item in city_slots[1]["available_zones"]}
+    assert options["zone_industrial"] == {"zone_id": "zone_industrial", "enactable": True, "cost": {"minerals": 1000}}
+    assert options["zone_research"]["reason"] == "trigger_no"
+    energy = districts["11"]["slots"][0]["available_zones"][0]
+    assert energy["zone_id"] == "zone_energy" and energy["reason"] == "zone_unavailable_tech_power_hub_1"
+    brief = apply_observation_view({"snapshot": "s", "state": {**state, "availability": shaped}}, "brief")["state"]
+    slots = brief["planets"][0]["zone_slots"]
+    assert slots[0]["slots"][1]["available_zones"][0]["zone_id"] == "zone_industrial"

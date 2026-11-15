@@ -10,23 +10,31 @@ const planetCommandFields = {
         'building_id', 'source_building', 'target_building'],
     demolish_building: ['zone_id', 'district_id', 'slot_index', 'source_zone',
         'building_id', 'source_building'],
-    convert_zone: ['zone_id', 'district_id', 'slot_index', 'source_zone', 'target_zone'],
+    convert_zone: ['district_id', 'slot_index', 'target_zone'],
     cancel_construction: ['item_id'],
 };
 
 function canonicalPlanetRequest(request) {
     if (request === null || typeof request !== 'object' || Array.isArray(request) ||
         !Object.hasOwn(planetCommandFields, request.kind)) return null;
-    const fields = ['kind', 'country_id', 'token', 'planet_id', 'colony_id', 'queue_id',
+    const required = ['kind', 'country_id', 'token', 'planet_id', 'colony_id', 'queue_id',
         ...planetCommandFields[request.kind]];
-    if (Object.keys(request).length !== fields.length || fields.some(key => !Object.hasOwn(request, key)) ||
+    const optional = request.kind === 'convert_zone' ? ['zone_id', 'source_zone'] : [];
+    const allowed = new Set([...required, ...optional]);
+    const keys = Object.keys(request);
+    if (keys.some(key => !allowed.has(key)) || required.some(key => !Object.hasOwn(request, key)) ||
         request.country_id !== '0' || typeof request.token !== 'string' || !/^[0-9a-f]{32}$/.test(request.token)) {
         throw new Error('Malformed typed planet command');
     }
+    const hasZone = Object.hasOwn(request, 'zone_id');
+    const hasSource = Object.hasOwn(request, 'source_zone');
+    if (request.kind === 'convert_zone' && hasZone !== hasSource) {
+        throw new Error('Occupied zone conversion requires both zone_id and source_zone');
+    }
     const canonical = {};
-    for (const field of fields) {
+    for (const field of keys) {
         const value = request[field];
-        if (field.endsWith('_id') && field !== 'country_id') {
+        if ((field.endsWith('_id') && field !== 'country_id') || field === 'item_id') {
             if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,9})$/.test(value) || Number(value) >= 4294967295) {
                 throw new Error('Planet command requires canonical observed handles');
             }
@@ -44,7 +52,7 @@ function canonicalPlanetRequest(request) {
         canonical[field] = value;
     }
     if ((request.kind === 'upgrade_building' && request.source_building === request.target_building) ||
-        (request.kind === 'convert_zone' && request.source_zone === request.target_zone)) {
+        (request.kind === 'convert_zone' && hasSource && request.source_zone === request.target_zone)) {
         throw new Error('Planet command must change its selected type');
     }
     return canonical;
@@ -120,7 +128,15 @@ function planetExactReferences(request, colony) {
     if (!districts.includes(Number(request.district_id))) throw new Error('District no longer belongs to this colony');
     const district = planetPoolObject(0x3114cd8, request.district_id, 8, 'District');
     const zones = planetHandleArray(district, 0x30, 0x3c, 32, 'District zone', true);
-    if (zones[request.slot_index] !== Number(request.zone_id)) throw new Error('Exact district slot changed');
+    const occupant = zones[request.slot_index];
+    if (occupant === undefined) throw new Error('Exact district slot changed');
+    if (request.kind === 'convert_zone' && occupant === 4294967295) {
+        if (Object.hasOwn(request, 'zone_id') || Object.hasOwn(request, 'source_zone')) {
+            throw new Error('Empty district slot cannot carry a source zone');
+        }
+        return;
+    }
+    if (occupant !== Number(request.zone_id)) throw new Error('Exact district slot changed');
     const zone = planetPoolObject(0x3114d18, request.zone_id, 8, 'Zone');
     // Native ZoneType::CanBuild at 0x480190..0x4801ae resolves this same
     // slot via 0x482700, then compares Zone+0x20 with the requested type.

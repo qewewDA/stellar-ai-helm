@@ -535,7 +535,7 @@ def _planet_zones(root: PDXNode, planet: dict) -> dict:
     districts, zones, buildings = (_single_node(root, key) for key in ('districts', 'zones', 'buildings'))
     if references is None or districts is None or zones is None:
         return unknown
-    result, seen_districts = {}, set()
+    result, seen_districts, zone_slots = {}, set(), []
     for key, value in references.entries:
         district_id = _identifier(value)
         if key is not None or district_id is None or district_id in seen_districts:
@@ -546,11 +546,13 @@ def _planet_zones(root: PDXNode, planet: dict) -> dict:
         zone_refs = _single_node(district, 'zones')
         if not _data_key(district_type) or zone_refs is None:
             return unknown
+        slots = []
         for slot_index, (zone_key, zone_value) in enumerate(zone_refs.entries):
             zone_id = _identifier(zone_value)
             if zone_key is not None or zone_id is None:
                 return unknown
-            if zone_id == '4294967295':  # Observed inactive rural-zone slot.
+            if zone_id == '4294967295':  # Observed empty district specialization slot.
+                slots.append({'slot_index': slot_index, 'occupied': False})
                 continue
             if zone_id in result:
                 return unknown
@@ -578,6 +580,8 @@ def _planet_zones(root: PDXNode, planet: dict) -> dict:
                 if valid:
                     summary.update({'buildings_known': True, 'buildings_by_id': found})
             result[zone_id] = summary
+            slots.append({'slot_index': slot_index, 'occupied': True, 'zone_id': zone_id, 'type': zone_type})
+        zone_slots.append({'district_id': district_id, 'district_type': district_type, 'slots': slots})
     # A zone positively referenced by two district objects cannot establish a
     # unique parent. Reject that identity instead of picking a convenient one.
     for zone_id, zone in result.items():
@@ -586,7 +590,7 @@ def _planet_zones(root: PDXNode, planet: dict) -> dict:
                    and any(_identifier(value) == zone_id for key, value in refs.entries)]
         if parents != [zone['district_id']]:
             return unknown
-    return {'zones_known': True, 'zones_by_id': result}
+    return {'zones_known': True, 'zones_by_id': result, 'zone_slots': zone_slots}
 
 
 def _empire_build(country: PDXNode | None) -> dict:

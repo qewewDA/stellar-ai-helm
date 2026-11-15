@@ -106,7 +106,8 @@ function qsAvailabilityIdentity(payload) {
     const identity = {kind: payload.kind};
     for (const key of ['planet_id', 'decision_id', 'policy', 'option', 'edict', 'species_id', 'right',
         'category', 'starbase_id', 'slot', 'module_id', 'building_id', 'type_id', 'building',
-        'district', 'zone_id', 'queue_id', 'colony_id', 'target_country_id', 'war_goal',
+        'district', 'district_id', 'slot_index', 'source_zone', 'target_zone', 'zone_id',
+        'queue_id', 'colony_id', 'target_country_id', 'war_goal',
         'area', 'technology']) {
         if (Object.prototype.hasOwnProperty.call(payload, key)) identity[key] = payload[key];
     }

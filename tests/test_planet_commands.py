@@ -312,3 +312,56 @@ process.stdout.write(JSON.stringify(results));
     assert [item["value"] for item in received[:len(valid)]] == valid
     assert all(item == {"error": True} for item in received[len(valid):-1])
     assert received[-1] == {"value": None}
+
+
+
+def _slot_snapshot(snapshot, *, empty=False):
+    planet = snapshot["planets_by_id"]["3"]
+    slots = [{"slot_index": 0, "occupied": False},
+             {"slot_index": 1, "occupied": False},
+             {"slot_index": 2, "occupied": True, "zone_id": "4", "type": "zone_default"}]
+    if not empty:
+        slots[1] = {"slot_index": 1, "occupied": True, "zone_id": "5", "type": "zone_industrial"}
+        planet["zones_by_id"]["5"] = {"id": "5", "district_id": "10", "district_type": "district_city",
+                                       "slot_index": 1, "type": "zone_industrial",
+                                       "buildings_known": True, "buildings_by_id": {}}
+    planet["zone_slots"] = [{"district_id": "10", "district_type": "district_city", "slots": slots}]
+    return snapshot
+
+
+def test_convert_zone_takes_explicit_district_and_slot_for_empty_slot(snapshot):
+    _slot_snapshot(snapshot, empty=True)
+    resolved = resolve_planet_command(snapshot, planet_request(
+        "convert_zone", planet_id="3", district_id="10", slot_index=1, target_zone="zone_research"))
+    assert resolved.district_id == "10" and resolved.slot_index == 1
+    assert resolved.source_zone is None and resolved.request.zone_id is None
+    payload = native_planet_payload(resolved, TOKEN)
+    assert payload["district_id"] == "10" and payload["slot_index"] == 1
+    assert "zone_id" not in payload and "source_zone" not in payload
+
+
+def test_convert_zone_replaces_occupied_slot_and_carries_source(snapshot):
+    _slot_snapshot(snapshot)
+    resolved = resolve_planet_command(snapshot, planet_request(
+        "convert_zone", planet_id="3", district_id="10", slot_index=1, target_zone="zone_research"))
+    assert resolved.request.zone_id == "5" and resolved.source_zone == "zone_industrial"
+    with pytest.raises(ValueError):
+        resolve_planet_command(snapshot, planet_request(
+            "convert_zone", planet_id="3", district_id="10", slot_index=1, target_zone="zone_industrial"))
+    with pytest.raises(ValueError):
+        resolve_planet_command(snapshot, planet_request(
+            "convert_zone", planet_id="3", district_id="10", slot_index=7, target_zone="zone_research"))
+    with pytest.raises(ValueError):
+        planet_request("convert_zone", planet_id="3", district_id="10", target_zone="zone_research")
+
+
+def test_parser_keeps_empty_specialization_slots_per_district():
+    root = loads('''colony={0={carrier={type=planet reference=3} districts={10 11}}}
+districts={10={type=district_city zones={4 4294967295 4294967295}} 11={type=district_generator zones={4294967295}}}
+zones={4={type=zone_default}} buildings={}
+''')
+    result = _planet_zones(root, {"id": "3", "colony": 0})
+    slots = {item["district_id"]: item for item in result["zone_slots"]}
+    assert [slot["occupied"] for slot in slots["10"]["slots"]] == [True, False, False]
+    assert slots["11"]["district_type"] == "district_generator"
+    assert slots["11"]["slots"] == [{"slot_index": 0, "occupied": False}]

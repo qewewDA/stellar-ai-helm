@@ -1407,14 +1407,16 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                        zone_id=zone_id, building_id=building_id)
 
     @server.tool(annotations=writing)
-    async def convert_zone(planet_id: str, zone_id: str, target_zone_id: str) -> dict:
-        """Queue a normally paid conversion of one exact district specialization zone.
+    async def convert_zone(planet_id: str, district_id: str, slot_index: int, target_zone_id: str) -> dict:
+        """Build or replace one district specialization zone in an exact slot.
 
-        zone_id is an observed zone handle; target_zone_id is a zone template.
+        Use district_id and slot_index from state.planets[].zone_slots in the
+        brief, and pick target_zone_id from that slot's available_zones with
+        enactable=true. Empty slots are built; occupied slots are replaced.
         Requires a paused session; the engine validates slots, unlocks and cost.
         """
         return await call_write(connection.planet_command, "convert_zone", planet_id=planet_id,
-                                       zone_id=zone_id, target_zone=target_zone_id)
+                                       district_id=district_id, slot_index=slot_index, target_zone=target_zone_id)
 
     @server.tool(annotations=writing)
     async def cancel_construction(planet_id: str, item_id: str) -> dict:
@@ -1990,7 +1992,7 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "queue_colony_ship": "Queue a normal colony ship with explicit observed colonization species",
                                     "upgrade_building": "Queue a normal paid upgrade of an exact building instance",
                                     "demolish_building": "Demolish one exact observed building instance normally",
-                                    "convert_zone": "Queue a normal paid specialization zone conversion",
+                                    "convert_zone": "Build or replace a paid specialization zone in an explicit district slot",
                                     "cancel_construction": "Cancel one exact planet queue item and verify its refund",
                                     "survey_planet": "Order one science fleet to survey one exact observed body",
                                     "build_station": "Order one constructor to build a normal mining/research station or outpost",

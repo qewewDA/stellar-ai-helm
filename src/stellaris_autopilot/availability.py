@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .country_commands import policy_options
 from .decision_commands import _never
+from .planet_commands import observed_zone_slots
 from .species_rights_commands import CATEGORIES as SPECIES_CATEGORIES, category_of
 
 AVAILABILITY_LIMIT = 3000  # total per observation, sent in native batches of 500
@@ -141,6 +142,49 @@ def _zone_ids(state: dict, planet_id: str) -> list[str]:
             if handle is not None:
                 ids.append(handle)
     return ids
+
+
+def _planet_zone_slots(state: dict, planet_id: str) -> list[dict]:
+    return observed_zone_slots(_planet_raw(state, planet_id))
+
+
+def _slot_definition(bundle: dict, district_type, slot_index: int) -> tuple[str | None, dict | None]:
+    if not isinstance(district_type, str) or type(slot_index) is not int:
+        return None, None
+    for record in _records(bundle, "districts"):
+        if _id_of(record) != district_type:
+            continue
+        keys = _definition(record).get("zone_slots")
+        if not isinstance(keys, list) or slot_index >= len(keys):
+            return None, None
+        key = keys[slot_index]
+        if not isinstance(key, str):
+            return None, None
+        for slot in _records(bundle, "zone_slots"):
+            if _id_of(slot) == key:
+                return key, _definition(slot)
+        return key, None
+    return None, None
+
+
+def _zones_for_slot(bundle: dict, slot_key: str | None, slot_def: dict | None) -> list[dict]:
+    if not isinstance(slot_def, dict):
+        return []
+    if _never(slot_def.get("potential")):
+        return []
+    included = slot_def.get("included_zone_sets") or []
+    included = included if isinstance(included, list) else [included]
+    start = slot_def.get("start")
+    matched = []
+    for record in _records(bundle, "zones"):
+        ident = _id_of(record)
+        if not ident or _never(_definition(record).get("potential")):
+            continue
+        sets = _definition(record).get("zone_sets")
+        sets = sets if isinstance(sets, list) else [sets] if sets else []
+        if ident in included or ident == start or any(item in included for item in sets):
+            matched.append(record)
+    return matched
 
 
 def _construction_for_planet(state: dict, planet_id: str) -> list[dict]:
@@ -280,14 +324,41 @@ def build_candidates(state: dict, bundle: dict, *, limit: int = AVAILABILITY_LIM
         zones = _zone_ids(state, planet["planet_id"])
         if not zones:
             skipped.setdefault("buildings", "Zone identities are not exactly observable on a planet")
-            continue
-        for zone_id in zones:
-            for record in building_records:
-                if not add({"kind": "queue_building", "planet_id": planet["planet_id"],
-                            "colony_id": planet["colony_id"], "queue_id": planet["queue_id"],
-                            "zone_id": zone_id, "building": _id_of(record)}):
-                    skipped.setdefault("truncated", "Availability query reached the candidate limit")
-                    return candidates, skipped
+        else:
+            for zone_id in zones:
+                for record in building_records:
+                    if not add({"kind": "queue_building", "planet_id": planet["planet_id"],
+                                "colony_id": planet["colony_id"], "queue_id": planet["queue_id"],
+                                "zone_id": zone_id, "building": _id_of(record)}):
+                        skipped.setdefault("truncated", "Availability query reached the candidate limit")
+                        return candidates, skipped
+        slots = _planet_zone_slots(state, planet["planet_id"])
+        if not slots:
+            skipped.setdefault("zones", "District zone slots are not exactly observable on a planet")
+        else:
+            for slot in slots:
+                slot_key, slot_def = _slot_definition(bundle, slot.get("district_type"), slot.get("slot_index"))
+                if slot.get("district_id") is None or type(slot.get("slot_index")) is not int:
+                    skipped.setdefault("zones", "A district zone slot is missing its identity")
+                    continue
+                if slot_def is None:
+                    skipped.setdefault("zones", "A district zone slot has no matching knowledge definition")
+                    continue
+                current = slot.get("type") if slot.get("occupied") is not False else None
+                for record in _zones_for_slot(bundle, slot_key, slot_def):
+                    ident = _id_of(record)
+                    if not ident or ident == current:
+                        continue
+                    payload = {"kind": "convert_zone", "planet_id": planet["planet_id"],
+                               "colony_id": planet["colony_id"], "queue_id": planet["queue_id"],
+                               "district_id": slot["district_id"], "slot_index": slot["slot_index"],
+                               "target_zone": ident}
+                    if slot.get("occupied") is not False and slot.get("zone_id") and slot.get("type"):
+                        payload["zone_id"] = slot["zone_id"]
+                        payload["source_zone"] = slot["type"]
+                    if not add(payload):
+                        skipped.setdefault("truncated", "Availability query reached the candidate limit")
+                        return candidates, skipped
 
     # War goals against observed contacts (not self)
     contacts = _contact_ids(state)
@@ -336,6 +407,7 @@ def mark_unqueried_groups(candidates: list[dict], skipped: dict) -> dict:
     kinds = {item.get("kind") for item in candidates}
     groups = {"war_goals": {"declare_war"}, "starbases": {"queue_starbase_module", "queue_starbase_building"},
               "construction": {"queue_district"}, "buildings": {"queue_building"},
+              "zones": {"convert_zone"},
               "species_rights": {"set_species_right"}, "edicts": {"activate_edict"}, "policies": {"set_policy"}}
     for group, group_kinds in groups.items():
         if group not in skipped and not (kinds & group_kinds):
@@ -387,6 +459,9 @@ def _result_key(item: dict) -> tuple:
         return (kind, str(item.get("planet_id")), item.get("district"))
     if kind == "queue_building":
         return (kind, str(item.get("planet_id")), str(item.get("zone_id")), item.get("building"))
+    if kind == "convert_zone":
+        return (kind, str(item.get("planet_id")), str(item.get("district_id")), item.get("slot_index"),
+                item.get("target_zone"))
     return (kind, repr(item))
 
 
@@ -464,6 +539,7 @@ def shape_availability(state: dict, bundle: dict, results: list[dict] | None, *,
     war_out = _shape_war_goals(state, bundle, index, queried, skipped)
     starbases_out = _shape_starbases(state, bundle, index, queried, skipped)
     construction_out = _shape_construction(state, bundle, index, queried, skipped)
+    zones_out = _shape_zones(state, bundle, index, queried, skipped)
     research_out = _shape_research(state)
 
     return {
@@ -476,6 +552,7 @@ def shape_availability(state: dict, bundle: dict, results: list[dict] | None, *,
         "war_goals": war_out,
         "starbases": starbases_out,
         "construction": construction_out,
+        "zones": zones_out,
         "research": research_out,
     }
 
@@ -734,6 +811,86 @@ def _shape_construction(state, bundle, index, queried, skipped):
     if known:
         known = seen_known or not seen_ambiguous
     return {"known": known, "reason": skipped.get("construction") or skipped.get("buildings"), "planets": planets}
+
+
+def _shape_zones(state, bundle, index, queried, skipped):
+    if not queried:
+        return {"known": False}
+    known = "zones" not in skipped
+    seen_known = False
+    seen_ambiguous = False
+    planets = []
+    for planet in planet_identities(state):
+        planet_id = planet["planet_id"]
+        districts = []
+        raw_slots = {}
+        for slot in _planet_zone_slots(state, planet_id):
+            raw_slots.setdefault(slot.get("district_id"), {
+                "district_id": slot.get("district_id"),
+                "district_type": slot.get("district_type"),
+                "slots": [],
+            })["slots"].append(slot)
+        for district_id, district in raw_slots.items():
+            slots_out = []
+            for slot in district["slots"]:
+                slot_index = slot.get("slot_index")
+                slot_key, slot_def = _slot_definition(bundle, slot.get("district_type"), slot_index)
+                available = []
+                current_type = slot.get("type") if slot.get("occupied") is not False else None
+                for record in _zones_for_slot(bundle, slot_key, slot_def):
+                    ident = _id_of(record)
+                    if not ident or ident == current_type:
+                        continue
+                    verdict = _verdict(index, ("convert_zone", planet_id, str(district_id), slot_index, ident))
+                    if verdict is None:
+                        continue
+                    if verdict.get("known") is False:
+                        seen_ambiguous = True
+                        continue
+                    raw_item = index.get(("convert_zone", planet_id, str(district_id), slot_index, ident))
+                    if raw_item and raw_item.get("error") == "precondition":
+                        continue
+                    seen_known = True
+                    cost, cost_known = _cost(_definition(record))
+                    item = {"zone_id": ident, "enactable": verdict.get("enactable") is True}
+                    if cost_known:
+                        item["cost"] = cost
+                    else:
+                        item["cost_known"] = False
+                    if not item["enactable"] and verdict.get("reason"):
+                        item["reason"] = verdict["reason"]
+                    available.append(item)
+                current = None
+                if slot.get("occupied") is not False and slot.get("zone_id"):
+                    observed = (_planet_raw(state, planet_id).get("zones_by_id") or {}).get(slot["zone_id"]) or {}
+                    current = {"zone_id": slot["zone_id"], "type": slot.get("type") or observed.get("type")}
+                    if observed.get("buildings_known") is True and isinstance(observed.get("buildings_by_id"), dict):
+                        current["buildings_known"] = True
+                        current["buildings"] = [
+                            {"building_id": building.get("id") or key, "type": building.get("type"),
+                             "position": building.get("position")}
+                            for key, building in observed["buildings_by_id"].items() if isinstance(building, dict)
+                        ]
+                    elif "buildings_known" in observed:
+                        current["buildings_known"] = observed.get("buildings_known")
+                    max_buildings = None
+                    for record in _records(bundle, "zones"):
+                        if _id_of(record) == current.get("type"):
+                            max_buildings = _definition(record).get("max_buildings")
+                            break
+                    if type(max_buildings) is int:
+                        current["max_buildings"] = max_buildings
+                entry = {"slot_index": slot_index, "occupied": current is not None,
+                         "current": current, "available_zones": available}
+                if slot_key:
+                    entry["slot_key"] = slot_key
+                slots_out.append(entry)
+            districts.append({"district_id": district_id, "district_type": district.get("district_type"),
+                              "slots": slots_out})
+        planets.append({"planet_id": planet_id, "districts": districts})
+    if known:
+        known = seen_known or not seen_ambiguous
+    return {"known": known, "reason": skipped.get("zones"), "planets": planets}
 
 
 def _shape_research(state):

@@ -7,7 +7,7 @@ of success; the conservative verifiers require an exact new state change.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import math
 import re
 
@@ -40,6 +40,8 @@ class PlanetRequest:
     target_building: str | None = None
     target_zone: str | None = None
     item_id: str | None = None
+    district_id: str | None = None
+    slot_index: int | None = None
 
     def to_dict(self) -> dict:
         return {key: value for key, value in asdict(self).items() if value is not None}
@@ -48,18 +50,54 @@ class PlanetRequest:
 _FIELDS = {
     "upgrade_building": {"planet_id", "zone_id", "building_id", "target_building"},
     "demolish_building": {"planet_id", "zone_id", "building_id"},
-    "convert_zone": {"planet_id", "zone_id", "target_zone"},
+    "convert_zone": {"planet_id", "target_zone"},  # plus district_id+slot_index and/or occupied zone_id
     "cancel_construction": {"planet_id", "item_id"},
 }
 
 
+def _slot_index(value) -> int:
+    if type(value) is int and not isinstance(value, bool) and 0 <= value < 32:
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit() and 0 <= int(value) < 32:
+        return int(value)
+    raise ValueError("Expected a district zone slot index")
+
+
 def planet_request(kind: str, **payload) -> PlanetRequest:
+    if kind == "convert_zone":
+        return _convert_zone_request(payload)
     if kind not in KINDS or set(payload) != _FIELDS[kind]:
         raise ValueError("Unsupported planet order or unexpected fields")
     values = {key: (_key(value, "building") if key == "target_building" else
                     _key(value, "zone") if key == "target_zone" else _id(value))
               for key, value in payload.items()}
     return PlanetRequest(kind, **values)
+
+
+def _convert_zone_request(payload: dict) -> PlanetRequest:
+    """Build or replace a specialization on an explicit district slot.
+
+    Preferred fields: planet_id, district_id, slot_index, target_zone.
+    An occupied zone handle (zone_id) is also accepted, alone or together
+    with the district slot when they refer to the same observed slot.
+    """
+    allowed = {"planet_id", "district_id", "slot_index", "target_zone", "zone_id"}
+    if set(payload) - allowed or "planet_id" not in payload or "target_zone" not in payload:
+        raise ValueError("Unsupported planet order or unexpected fields")
+    planet_id = _id(payload["planet_id"])
+    target_zone = _key(payload["target_zone"], "zone")
+    zone_id = _id(payload["zone_id"]) if payload.get("zone_id") is not None else None
+    has_slot = payload.get("district_id") is not None or payload.get("slot_index") is not None
+    if has_slot:
+        if payload.get("district_id") is None or payload.get("slot_index") is None:
+            raise ValueError("convert_zone requires both district_id and slot_index")
+        district_id = _id(str(payload["district_id"]) if type(payload["district_id"]) is int else payload["district_id"])
+        return PlanetRequest("convert_zone", planet_id=planet_id, district_id=district_id,
+                             slot_index=_slot_index(payload["slot_index"]), target_zone=target_zone,
+                             zone_id=zone_id)
+    if zone_id is None:
+        raise ValueError("convert_zone requires district_id and slot_index, or an occupied zone_id")
+    return PlanetRequest("convert_zone", planet_id=planet_id, zone_id=zone_id, target_zone=target_zone)
 
 
 @dataclass(frozen=True)
@@ -149,6 +187,8 @@ def resolve_planet_command(state: dict, request: PlanetRequest) -> ResolvedPlane
                 or not _progress(item) or not isinstance(item.get("resources"), dict)):
             raise ValueError("The exact pending paid construction item is unobservable")
         return ResolvedPlanetCommand(request, colony_id, queue_id)
+    if request.kind == "convert_zone":
+        return _resolve_convert_zone(state, request, planet, colony_id, queue_id)
     zone = planet.get("zones_by_id", {}).get(request.zone_id)
     if (planet.get("zones_known") is not True or not isinstance(zone, dict)
             or zone.get("id") != request.zone_id or zone.get("buildings_known") is not True
@@ -171,9 +211,69 @@ def resolve_planet_command(state: dict, request: PlanetRequest) -> ResolvedPlane
         source_building = _key(building.get("type"), "building")
         if request.kind == "upgrade_building" and source_building == request.target_building:
             raise ValueError("An upgrade must select a different target type")
-    elif source_zone == request.target_zone:
-        raise ValueError("Zone conversion must select a different zone type")
     return ResolvedPlanetCommand(request, colony_id, queue_id, district_id, slot, source_zone, source_building)
+
+
+def observed_zone_slots(planet: dict) -> list[dict]:
+    """Flatten observed district specialization slots, including empty ones."""
+    slots = []
+    raw = planet.get("zone_slots") if isinstance(planet, dict) else None
+    if isinstance(raw, list):
+        for district in raw:
+            if not isinstance(district, dict):
+                continue
+            district_id = district.get("district_id")
+            district_type = district.get("district_type")
+            for slot in district.get("slots") or []:
+                if not isinstance(slot, dict) or type(slot.get("slot_index")) is not int:
+                    continue
+                item = dict(slot)
+                item.setdefault("district_id", district_id)
+                item.setdefault("district_type", district_type)
+                slots.append(item)
+        return slots
+    for zone in (planet.get("zones_by_id") or {}).values() if isinstance(planet.get("zones_by_id"), dict) else []:
+        if not isinstance(zone, dict) or type(zone.get("slot_index")) is not int:
+            continue
+        slots.append({
+            "slot_index": zone["slot_index"], "occupied": True,
+            "zone_id": zone.get("id") or zone.get("zone_id"), "type": zone.get("type"),
+            "district_id": zone.get("district_id"), "district_type": zone.get("district_type"),
+        })
+    return slots
+
+
+def _resolve_convert_zone(state, request, planet, colony_id, queue_id) -> ResolvedPlanetCommand:
+    if planet.get("zones_known") is not True:
+        raise ValueError("The exact district zone slots are unobservable")
+    slots = observed_zone_slots(planet)
+    chosen = None
+    if request.district_id is not None and request.slot_index is not None:
+        matches = [slot for slot in slots
+                   if slot.get("district_id") == request.district_id and slot.get("slot_index") == request.slot_index]
+        if len(matches) != 1:
+            raise ValueError("The exact district slot is unobservable")
+        chosen = matches[0]
+        if request.zone_id is not None and chosen.get("zone_id") != request.zone_id:
+            raise ValueError("Zone handle does not match the district slot")
+    elif request.zone_id is not None:
+        matches = [slot for slot in slots if slot.get("zone_id") == request.zone_id]
+        if len(matches) != 1:
+            raise ValueError("The exact occupied zone is unobservable")
+        chosen = matches[0]
+    else:
+        raise ValueError("convert_zone requires district_id and slot_index, or an occupied zone_id")
+    occupied = chosen.get("occupied") is not False and chosen.get("zone_id") not in (None, "4294967295")
+    zone_id = _id(chosen["zone_id"]) if occupied else None
+    source_zone = _key(chosen.get("type"), "zone") if occupied else None
+    if occupied and source_zone == request.target_zone:
+        raise ValueError("Zone conversion must select a different zone type")
+    district_id = _id(chosen.get("district_id"))
+    slot = chosen.get("slot_index")
+    if type(slot) is not int or not 0 <= slot < 32:
+        raise ValueError("The zone's observed district slot index is required")
+    filled = replace(request, zone_id=zone_id, district_id=district_id, slot_index=slot)
+    return ResolvedPlanetCommand(filled, colony_id, queue_id, district_id, slot, source_zone, None)
 
 
 def native_planet_payload(command: ResolvedPlanetCommand, token: str) -> dict:
@@ -188,13 +288,17 @@ def native_planet_payload(command: ResolvedPlanetCommand, token: str) -> dict:
             raise ValueError("A cancellation cannot carry zone or building fields")
     else:
         _id(command.district_id)
-        _key(command.source_zone, "zone")
         if type(command.slot_index) is not int or not 0 <= command.slot_index < 32:
             raise ValueError("Invalid resolved district slot")
         if command.kind == "convert_zone":
             if command.source_building is not None:
                 raise ValueError("Zone conversion cannot carry a source building")
+            if command.source_zone is not None:
+                _key(command.source_zone, "zone")
+            elif command.request.zone_id is not None:
+                raise ValueError("An occupied zone conversion requires the source zone type")
         else:
+            _key(command.source_zone, "zone")
             _key(command.source_building, "building")
     return {**command.to_dict(), "country_id": "0", "token": token}
 

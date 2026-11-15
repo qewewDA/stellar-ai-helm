@@ -82,7 +82,8 @@ class DemolishStep(_Step):
 class ConvertStep(_Step):
     kind: Literal["convert_zone"]
     planet_id: StrictStr
-    zone_id: StrictStr
+    district_id: StrictStr
+    slot_index: StrictInt
     target_zone_id: StrictStr
 
 
