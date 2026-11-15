@@ -107,7 +107,7 @@ After a successful connection, `attached_status()`, `checkpoint_game()`, and `di
 
 ## DeepSeek Harness preset 「群星自动驾驶」
 
-This is a separately maintained DeepSeek Harness agent preset for this MCP. The package name is `@local/dsh-stellaris-mcp-preset`; it is not part of this repository. The current maintained copy lives at `C:\Users\qwqwq\agent-tools\deepseek-harness-stellaris\`, and the install target is the `bundle` directory inside it. Paste the full text of `INSTALL-PROMPT.md` from that directory into DeepSeek Harness's 创造模式 (Creation mode), install it as instructed, then open a new session and select 「群星自动驾驶」. If the bundle is already installed, remove it first and install again. The model and temperature are chosen in the session settings; they cannot be set in the preset.
+This repository includes a DeepSeek Harness agent preset at `presets/deepseek-harness/`. The package name is `@local/dsh-stellaris-mcp-preset`. Before installing, replace `<REPO>`, `<STEAM>`, and `<PATH-TO-KNOWLEDGE.json>` in `presets/deepseek-harness/bundle/cordis.patch.yml` with the paths on your machine. Then paste the full text of `presets/deepseek-harness/INSTALL-PROMPT.md` into DeepSeek Harness's 创造模式 (Creation mode), install it as instructed, then open a new session and select 「群星自动驾驶」. If the bundle is already installed, remove it first and install again. The model and temperature are chosen in the session settings; they cannot be set in the preset.
 
 ## Safety rules
 

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "群星自动驾驶",
+    "description": "精简 PTC 模式：只从当前可用性清单挑选可颁布、可建造或可转换特化项；convert_zone 使用 district_id 与 slot_index；首次观察较慢属正常，不要重试。",
+    "detail": "docs/DETAIL.md"
+  }
+}

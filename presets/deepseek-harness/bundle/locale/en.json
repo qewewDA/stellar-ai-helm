@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Stellaris Autopilot",
+    "description": "Lean PTC mode: pick enactable items from validator lists, including district specialization slots; convert_zone uses district_id and slot_index; the first observe may take 13-20s and must not be retried.",
+    "detail": "docs/DETAIL.md"
+  }
+}

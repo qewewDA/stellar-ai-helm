@@ -107,7 +107,7 @@ uv run python scripts/serve_existing_game.py --help
 
 ## DeepSeek Harness 预设「群星自动驾驶」
 
-这是为本 MCP 单独维护的 DeepSeek Harness Agent 预设，包名为 `@local/dsh-stellaris-mcp-preset`，不在本仓库内。当前维护副本在 `C:\Users\qwqwq\agent-tools\deepseek-harness-stellaris\`，安装目标是其中的 `bundle`。把该目录下的 `INSTALL-PROMPT.md` 全文贴进 DeepSeek Harness 的「创造模式」，按提示安装后，新建会话并选择「群星自动驾驶」。若提示已经装过，需要先卸载再安装。模型和温度在会话设置里选择，不能写进预设。
+本仓库在 `presets/deepseek-harness/` 提供配套的 DeepSeek Harness Agent 预设，包名为 `@local/dsh-stellaris-mcp-preset`。安装前先在 `presets/deepseek-harness/bundle/cordis.patch.yml` 中把 `<REPO>`、`<STEAM>` 和 `<PATH-TO-KNOWLEDGE.json>` 换成你本机的实际路径。然后把 `presets/deepseek-harness/INSTALL-PROMPT.md` 全文贴进 DeepSeek Harness 的「创造模式」，按提示安装后，新建会话并选择「群星自动驾驶」。若提示已经装过，需要先卸载再安装。模型和温度在会话设置里选择，不能写进预设。
 
 ## 安全约定
 
