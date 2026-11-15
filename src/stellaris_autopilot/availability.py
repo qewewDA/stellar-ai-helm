@@ -10,7 +10,7 @@ from .country_commands import policy_options
 from .decision_commands import _never
 from .species_rights_commands import CATEGORIES as SPECIES_CATEGORIES, category_of
 
-AVAILABILITY_LIMIT = 1500  # total per observation, sent in native batches of 500
+AVAILABILITY_LIMIT = 3000  # total per observation, sent in native batches of 500
 NATIVE_BATCH = 500
 GENERIC_REASON = "Normal native command validation rejected"
 
@@ -52,29 +52,95 @@ def _id_of(record: dict) -> str | None:
     return ident if isinstance(ident, str) else None
 
 
+def _handle(value) -> str | None:
+    """Canonical object id; 0 is a valid queue/colony handle and must not be treated as missing."""
+    if type(value) is int and not isinstance(value, bool) and 0 <= value < 4294967295:
+        return str(value)
+    if isinstance(value, str) and value.isascii() and (value == "0" or value.isdigit()) and int(value) < 4294967295:
+        return value
+    if isinstance(value, dict):
+        for key in ("id", "colony_id", "queue_id", "build_queue", "colony"):
+            found = _handle(value.get(key))
+            if found is not None:
+                return found
+    return None
+
+
+def _planet_queue_id(state: dict, planet_id: str, raw) -> str | None:
+    """Prefer the planet's build_queue, then the unique owned planet queue at this location."""
+    handle = _handle(raw)
+    queues = ((state.get("construction") or {}) if isinstance(state, dict) else {}).get("queues_by_id") or {}
+    if not isinstance(queues, dict):
+        return handle
+
+    def _is_planet_queue(queue) -> bool:
+        if not isinstance(queue, dict) or queue.get("type") != "planet" or queue.get("owner") not in (0, "0"):
+            return False
+        location = queue.get("location") if isinstance(queue.get("location"), dict) else {}
+        return location.get("type") == 2 and _handle(location.get("id")) == planet_id
+
+    if handle is not None and _is_planet_queue(queues.get(handle)):
+        return handle
+    matches = [qid for qid, queue in queues.items() if _is_planet_queue(queue)]
+    if len(matches) == 1:
+        return _handle(matches[0]) or matches[0]
+    return handle
+
+
 def planet_identities(state: dict) -> list[dict]:
     planets = state.get("planets") if isinstance(state, dict) else None
+    by_id = state.get("planets_by_id") if isinstance(state, dict) and isinstance(state.get("planets_by_id"), dict) else {}
     if not isinstance(planets, list):
-        return []
+        planets = list(by_id.values()) if by_id else []
     items = []
     for planet in planets:
-        if not isinstance(planet, dict) or planet.get("id") is None:
+        if not isinstance(planet, dict):
             continue
-        colony = planet.get("colony")
-        colony_id = colony if isinstance(colony, str) else (str(colony) if isinstance(colony, int) else None)
-        if isinstance(colony, dict):
-            colony_id = colony.get("id") or colony.get("colony_id")
-        queue = planet.get("build_queue") or planet.get("queue")
-        queue_id = queue if isinstance(queue, str) else (str(queue) if isinstance(queue, int) else None)
-        if isinstance(queue, dict):
-            queue_id = queue.get("id") or queue.get("queue_id")
+        planet_id = _handle(planet.get("id") if planet.get("id") is not None else planet.get("planet_id"))
+        if planet_id is None:
+            continue
+        raw = by_id.get(planet_id) if isinstance(by_id.get(planet_id), dict) else planet
         items.append({
-            "planet_id": str(planet.get("id")),
-            "name": planet.get("name"),
-            "colony_id": str(colony_id) if colony_id is not None else None,
-            "queue_id": str(queue_id) if queue_id is not None else None,
+            "planet_id": planet_id,
+            "name": raw.get("name") if isinstance(raw, dict) else planet.get("name"),
+            "colony_id": _handle(raw.get("colony")),
+            "queue_id": _planet_queue_id(state, planet_id, raw.get("build_queue") if raw.get("build_queue") is not None else raw.get("queue")),
         })
     return items
+
+
+def _planet_raw(state: dict, planet_id: str) -> dict:
+    by_id = state.get("planets_by_id") if isinstance(state.get("planets_by_id"), dict) else {}
+    raw = by_id.get(planet_id)
+    if isinstance(raw, dict):
+        return raw
+    planets = state.get("planets") if isinstance(state.get("planets"), list) else []
+    for planet in planets:
+        if not isinstance(planet, dict):
+            continue
+        ident = _handle(planet.get("id") if planet.get("id") is not None else planet.get("planet_id"))
+        if ident == planet_id:
+            return planet
+    return {}
+
+
+def _zone_ids(state: dict, planet_id: str) -> list[str]:
+    """Zone handles including 0; queried even when buildings_known is false."""
+    zones = _planet_raw(state, planet_id).get("zones_by_id")
+    if not isinstance(zones, dict):
+        return []
+    ids = []
+    for key, zone in zones.items():
+        if isinstance(zone, dict):
+            ident = zone.get("id")
+            handle = _handle(ident if ident is not None else key)
+            if handle is not None:
+                ids.append(handle)
+        else:
+            handle = _handle(key)
+            if handle is not None:
+                ids.append(handle)
+    return ids
 
 
 def _construction_for_planet(state: dict, planet_id: str) -> list[dict]:
@@ -171,7 +237,9 @@ def build_candidates(state: dict, bundle: dict, *, limit: int = AVAILABILITY_LIM
                 skipped.setdefault("truncated", "Availability query reached the candidate limit")
                 return candidates, skipped
 
-    # Species rights: validator is pinned for the primary species only
+    # Species rights: the pinned native command only walks the primary-species
+    # rights block. A non-primary lookup can fall through to a creating path, so
+    # default and built_species options stay known:false rather than being queried.
     rights = state.get("species_rights") if isinstance(state, dict) else None
     primary = (rights.get("entries") or {}).get("primary") if isinstance(rights, dict) and rights.get("known") is True else None
     right_records = _records(bundle, "species_rights")
@@ -193,6 +261,31 @@ def build_candidates(state: dict, bundle: dict, *, limit: int = AVAILABILITY_LIM
                     continue
                 if not add({"kind": "set_species_right", "species_id": species_id, "right": right,
                             "current_right": current, "category": category}):
+                    skipped.setdefault("truncated", "Availability query reached the candidate limit")
+                    return candidates, skipped
+
+    # Districts and buildings need colony and queue identities. 0 is a valid handle.
+    district_records = [r for r in _records(bundle, "districts") if _id_of(r) and not _never(_definition(r).get("potential"))]
+    building_records = [r for r in _records(bundle, "buildings") if _id_of(r) and not _never(_definition(r).get("potential"))]
+    for planet in planets:
+        if planet.get("colony_id") is None or planet.get("queue_id") is None:
+            skipped.setdefault("construction", "A planet is missing colony or build queue identity")
+            continue
+        for record in district_records:
+            if not add({"kind": "queue_district", "planet_id": planet["planet_id"],
+                        "colony_id": planet["colony_id"], "queue_id": planet["queue_id"],
+                        "district": _id_of(record)}):
+                skipped.setdefault("truncated", "Availability query reached the candidate limit")
+                return candidates, skipped
+        zones = _zone_ids(state, planet["planet_id"])
+        if not zones:
+            skipped.setdefault("buildings", "Zone identities are not exactly observable on a planet")
+            continue
+        for zone_id in zones:
+            for record in building_records:
+                if not add({"kind": "queue_building", "planet_id": planet["planet_id"],
+                            "colony_id": planet["colony_id"], "queue_id": planet["queue_id"],
+                            "zone_id": zone_id, "building": _id_of(record)}):
                     skipped.setdefault("truncated", "Availability query reached the candidate limit")
                     return candidates, skipped
 
@@ -232,36 +325,6 @@ def build_candidates(state: dict, bundle: dict, *, limit: int = AVAILABILITY_LIM
                                 "slot": str(slot), "building_id": building_id}):
                         skipped.setdefault("truncated", "Availability query reached the candidate limit")
                         return candidates, skipped
-
-    # Districts and buildings (need colony and queue identities)
-    district_records = [r for r in _records(bundle, "districts") if _id_of(r) and not _never(_definition(r).get("potential"))]
-    building_records = [r for r in _records(bundle, "buildings") if _id_of(r) and not _never(_definition(r).get("potential"))]
-    for planet in planets:
-        if not planet.get("colony_id") or not planet.get("queue_id"):
-            skipped.setdefault("construction", "A planet is missing colony or build queue identity")
-            continue
-        for record in district_records:
-            if not add({"kind": "queue_district", "planet_id": planet["planet_id"],
-                        "colony_id": planet["colony_id"], "queue_id": planet["queue_id"],
-                        "district": _id_of(record)}):
-                skipped.setdefault("truncated", "Availability query reached the candidate limit")
-                return candidates, skipped
-        zones = []
-        raw_planets = state.get("planets") if isinstance(state.get("planets"), list) else []
-        raw = next((p for p in raw_planets if isinstance(p, dict) and str(p.get("id")) == planet["planet_id"]), {})
-        if isinstance(raw.get("zones_by_id"), dict):
-            zones = [str(zone.get("id") or key) for key, zone in raw["zones_by_id"].items()
-                     if isinstance(zone, dict)]
-        if not zones:
-            skipped.setdefault("buildings", "Zone identities are not exactly observable on a planet")
-            continue
-        for zone_id in zones:
-            for record in building_records:
-                if not add({"kind": "queue_building", "planet_id": planet["planet_id"],
-                            "colony_id": planet["colony_id"], "queue_id": planet["queue_id"],
-                            "zone_id": zone_id, "building": _id_of(record)}):
-                    skipped.setdefault("truncated", "Availability query reached the candidate limit")
-                    return candidates, skipped
 
     return candidates, skipped
 
@@ -612,6 +675,8 @@ def _shape_construction(state, bundle, index, queried, skipped):
         return {"known": False}
     planets = []
     known = "construction" not in skipped and "buildings" not in skipped
+    seen_known = False
+    seen_ambiguous = False
     for planet in planet_identities(state):
         planet_id = planet["planet_id"]
         districts = []
@@ -623,7 +688,9 @@ def _shape_construction(state, bundle, index, queried, skipped):
             if verdict is None:
                 continue
             if verdict.get("known") is False:
+                seen_ambiguous = True
                 continue
+            seen_known = True
             raw = index.get(("queue_district", planet_id, ident))
             if raw and raw.get("error") == "precondition":
                 continue
@@ -636,39 +703,36 @@ def _shape_construction(state, bundle, index, queried, skipped):
             if not item["enactable"] and verdict.get("reason"):
                 item["reason"] = verdict["reason"]
             districts.append(item)
-        raw_planets = state.get("planets") if isinstance(state.get("planets"), list) else []
-        raw = next((p for p in raw_planets if isinstance(p, dict) and str(p.get("id")) == planet_id), {})
         zones = []
-        if isinstance(raw.get("zones_by_id"), dict):
-            for key, zone in raw["zones_by_id"].items():
-                if not isinstance(zone, dict):
+        for zone_id in _zone_ids(state, planet_id):
+            buildings = []
+            for record in _records(bundle, "buildings"):
+                ident = _id_of(record)
+                if not ident or _never(_definition(record).get("potential")):
                     continue
-                zone_id = str(zone.get("id") or key)
-                buildings = []
-                for record in _records(bundle, "buildings"):
-                    ident = _id_of(record)
-                    if not ident or _never(_definition(record).get("potential")):
-                        continue
-                    verdict = _verdict(index, ("queue_building", planet_id, zone_id, ident))
-                    if verdict is None:
-                        continue
-                    if verdict.get("known") is False:
-                        known = False
-                        continue
-                    raw_item = index.get(("queue_building", planet_id, zone_id, ident))
-                    if raw_item and raw_item.get("error") == "precondition":
-                        continue
-                    cost, cost_known = _cost(_definition(record))
-                    item = {"building_id": ident, "enactable": verdict.get("enactable") is True}
-                    if cost_known:
-                        item["cost"] = cost
-                    else:
-                        item["cost_known"] = False
-                    if not item["enactable"] and verdict.get("reason"):
-                        item["reason"] = verdict["reason"]
-                    buildings.append(item)
-                zones.append({"zone_id": zone_id, "available_buildings": buildings})
+                verdict = _verdict(index, ("queue_building", planet_id, zone_id, ident))
+                if verdict is None:
+                    continue
+                if verdict.get("known") is False:
+                    seen_ambiguous = True
+                    continue
+                seen_known = True
+                raw_item = index.get(("queue_building", planet_id, zone_id, ident))
+                if raw_item and raw_item.get("error") == "precondition":
+                    continue
+                cost, cost_known = _cost(_definition(record))
+                item = {"building_id": ident, "enactable": verdict.get("enactable") is True}
+                if cost_known:
+                    item["cost"] = cost
+                else:
+                    item["cost_known"] = False
+                if not item["enactable"] and verdict.get("reason"):
+                    item["reason"] = verdict["reason"]
+                buildings.append(item)
+            zones.append({"zone_id": zone_id, "available_buildings": buildings})
         planets.append({"planet_id": planet_id, "available_districts": districts, "zones": zones})
+    if known:
+        known = seen_known or not seen_ambiguous
     return {"known": known, "reason": skipped.get("construction") or skipped.get("buildings"), "planets": planets}
 
 

@@ -51,7 +51,8 @@ _PAUSE_FAILURE_HINT = (". The game may still be paused; the pause op stays unver
 
 class AttachedRuntime:
     def __init__(self, process, native, user_dir: Path, state_dir: Path, token: str, *, extended=False,
-                 test_events=False, deadline=None, progress=None, cancel_event=None):
+                 test_events=False, deadline=None, progress=None, cancel_event=None,
+                 prior_phases=None, connect_t0=None):
         self.process, self.native = process, native
         self.user_dir, self.state_dir, self.token = Path(user_dir), Path(state_dir), token
         self.config_path = self.state_dir / "direct.json"
@@ -69,8 +70,24 @@ class AttachedRuntime:
         self._deadline, self._progress = deadline, progress
         self._cancel_event = cancel_event
         self.initial_summary = None
+        self._connect_t0 = connect_t0 if connect_t0 is not None else time.monotonic()
+        self._phase_started = time.monotonic()
+        self._current_phase = None
+        self._phase_timings = list(prior_phases or [])
+
+    def _close_phase(self):
+        now = time.monotonic()
+        if self._current_phase is not None:
+            self._phase_timings.append({
+                "phase": self._current_phase,
+                "seconds": round(now - self._phase_started, 3),
+            })
+        self._current_phase = None
+        self._phase_started = now
 
     def _phase(self, phase: str):
+        self._close_phase()
+        self._current_phase = phase
         check_cancelled(self._cancel_event, phase)
         if self._deadline is not None and time.monotonic() >= self._deadline:
             raise CampaignError("Connection deadline exceeded at " + phase)
@@ -285,6 +302,9 @@ class AttachedRuntime:
         self._phase("connected")
         if hasattr(self.native, "finish_initialization"):
             self.native.finish_initialization()
+        self._close_phase()
+        self.initial_summary["connect_phases"] = list(self._phase_timings)
+        self.initial_summary["connect_seconds"] = round(time.monotonic() - self._connect_t0, 3)
         self._deadline, self._progress, self._cancel_event = None, None, None
         return self
 
@@ -378,7 +398,16 @@ def connect_existing(executable: Path, state_root: Path, *, user_dir: Path, pid:
         raise ValueError("Connection timeout must be between 5 and 120 seconds")
     deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
 
+    recorded = []
+    last_name = None
+    last_at = connect_t0 = time.monotonic()
+
     def phase(name):
+        nonlocal last_name, last_at
+        now = time.monotonic()
+        if last_name is not None:
+            recorded.append({"phase": last_name, "seconds": round(now - last_at, 3)})
+        last_name, last_at = name, now
         check_cancelled(cancel_event, name)
         if deadline is not None and time.monotonic() >= deadline:
             raise CampaignError("Connection deadline exceeded at " + name)
@@ -409,7 +438,14 @@ def connect_existing(executable: Path, state_root: Path, *, user_dir: Path, pid:
             options.update(deadline=deadline, progress=progress)
         if cancel_event is not None:
             options["cancel_event"] = cancel_event
+        now = time.monotonic()
+        if last_name is not None:
+            recorded.append({"phase": last_name, "seconds": round(now - last_at, 3)})
         runtime = AttachedRuntime(process, native, user_dir, state_dir, token, **options)
+        if hasattr(runtime, "_phase_timings"):
+            runtime._phase_timings = list(recorded) + list(runtime._phase_timings or [])
+        if hasattr(runtime, "_connect_t0"):
+            runtime._connect_t0 = connect_t0
         return runtime.initialize()
     except BaseException:
         if runtime is not None:

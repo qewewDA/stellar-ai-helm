@@ -138,6 +138,10 @@ def _brief_planets(state: dict):
         if construction is not None:
             item["available_districts"] = construction.get("available_districts")
             item["available_buildings"] = construction.get("available_buildings")
+            if construction.get("districts_rejected_without_reason"):
+                item["districts_rejected_without_reason"] = construction["districts_rejected_without_reason"]
+            if construction.get("buildings_rejected_without_reason"):
+                item["buildings_rejected_without_reason"] = construction["buildings_rejected_without_reason"]
             if construction.get("known") is False:
                 item["available_construction_known"] = False
         compact.append(item)
@@ -338,18 +342,24 @@ def _availability_construction_planet(state: dict, planet_id: str):
     for item in construction["planets"]:
         if not isinstance(item, dict) or str(item.get("planet_id")) != str(planet_id):
             continue
-        districts = [entry for entry in item.get("available_districts") or []
-                     if isinstance(entry, dict) and entry.get("enactable") is True]
+        districts, district_generic = _split(item.get("available_districts") or [])
         buildings = []
+        building_generic = 0
         for zone in item.get("zones") or []:
             if not isinstance(zone, dict):
                 continue
-            available = [entry for entry in zone.get("available_buildings") or []
-                         if isinstance(entry, dict) and entry.get("enactable") is True]
+            available, generic = _split(zone.get("available_buildings") or [])
+            if generic:
+                building_generic += generic
             if available:
                 buildings.append({"zone_id": zone.get("zone_id"), "available_buildings": available})
-        return {"known": construction.get("known"), "available_districts": districts,
-                "available_buildings": buildings}
+        result = {"known": construction.get("known"), "available_districts": districts,
+                  "available_buildings": buildings}
+        if district_generic:
+            result["districts_rejected_without_reason"] = district_generic
+        if building_generic:
+            result["buildings_rejected_without_reason"] = building_generic
+        return result
     return None
 
 

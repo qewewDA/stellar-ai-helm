@@ -255,6 +255,7 @@ class DirectConnection:
         self.config_path = Path(config_path)
         self.native_bridge = native_bridge
         self.knowledge_provider = None
+        self._availability_cache = None  # (snapshot digest, availability); never computed during connect
         self._plan_local = threading.local()
         _configuration(self.config_path)
 
@@ -373,7 +374,12 @@ class DirectConnection:
         state = result.get("state") if isinstance(result, dict) else None
         if not isinstance(state, dict):
             return result
-        if not already_locked and not self._can_query_availability():
+        digest = result.get("snapshot")
+        cached = getattr(self, "_availability_cache", None)
+        if (isinstance(cached, tuple) and len(cached) == 2 and digest and cached[0] == digest
+                and isinstance(cached[1], dict) and cached[1].get("known") is True):
+            availability = cached[1]
+        elif not already_locked and not self._can_query_availability():
             availability = self._query_availability(state, config=config)
         elif already_locked:
             availability = self._query_availability(state, config=config)
@@ -384,6 +390,8 @@ class DirectConnection:
             except DirectLockBusy:
                 availability = shape_availability(state, self._knowledge_bundle() or {}, None, queried=False)
                 availability["reason"] = "Another writer owns the game mailbox; availability was not queried"
+        if digest and isinstance(availability, dict) and availability.get("known") is True:
+            self._availability_cache = (digest, availability)
         attached = dict(result)
         attached["state"] = {**state, "availability": availability}
         return attached

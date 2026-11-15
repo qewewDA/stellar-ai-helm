@@ -414,8 +414,16 @@ class NativeResearchBridge:
                     raise ValueError("Native RPC correlation failed; refusing further requests")
                 event_log = getattr(self, "event_log", None)
                 if event_log is not None:
+                    logged = result
+                    if isinstance(result, dict) and (result.get("kind") == "query_availability"
+                                                     or "candidates" in result or "results" in result):
+                        logged = {key: value for key, value in result.items() if key not in {"candidates", "results"}}
+                        if "candidates" in result:
+                            logged["candidates"] = len(result["candidates"]) if isinstance(result["candidates"], list) else result["candidates"]
+                        if "results" in result:
+                            logged["results"] = len(result["results"]) if isinstance(result["results"], list) else result["results"]
                     with event_log.open("a", encoding="utf-8") as stream:
-                        stream.write(json.dumps({"request_id": expected, "method": method, "result": result}) + "\n")
+                        stream.write(json.dumps({"request_id": expected, "method": method, "result": logged}) + "\n")
                 if result.get("wake_posted") is False:
                     self.wakeup_confirmed = False
                     self.last_runtime = None

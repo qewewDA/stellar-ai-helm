@@ -1,6 +1,6 @@
 """Availability is taken from game validator results, not static guesses."""
 from stellaris_autopilot.availability import (
-    build_candidates, shape_availability, _never,
+    build_candidates, shape_availability, _never, _handle, planet_identities,
 )
 from stellaris_autopilot.observation_view import apply_observation_view
 
@@ -181,3 +181,85 @@ def test_unqueried_availability_is_marked_known_false():
     shaped = shape_availability(state, _bundle(_decision("decision_ok")), None, queried=False)
     assert shaped["known"] is False
     assert shaped["planets"][0]["available_decisions_known"] is False
+
+
+def test_handle_zero_is_a_valid_colony_and_queue_id():
+    assert _handle(0) == "0"
+    assert _handle("0") == "0"
+    assert _handle(4294967295) is None
+    state = {
+        "planets": [{"id": 3, "name": "Earth", "colony": 0, "build_queue": 0}],
+        "construction": {"queues_by_id": {
+            "0": {"type": "planet", "owner": 0, "location": {"type": 2, "id": 3}},
+            "1": {"type": "army", "owner": 0, "location": {"type": 2, "id": 3}},
+        }},
+    }
+    assert planet_identities(state) == [
+        {"planet_id": "3", "name": "Earth", "colony_id": "0", "queue_id": "0"}]
+
+
+def test_planet_queue_falls_back_to_the_unique_planet_queue():
+    state = {
+        "planets_by_id": {"3": {"id": "3", "name": "Earth", "colony": 0}},
+        "construction": {"queues_by_id": {
+            "0": {"type": "planet", "owner": "0", "location": {"type": 2, "id": "3"}},
+        }},
+    }
+    assert planet_identities(state)[0]["queue_id"] == "0"
+    assert planet_identities(state)[0]["colony_id"] == "0"
+
+
+def test_construction_candidates_include_zero_handles_and_zones():
+    state = {
+        "planets": [{"id": "3", "name": "Earth", "colony": 0, "build_queue": 0,
+                     "zones_by_id": {"0": {"id": 0}, "1": {"id": 1}}}],
+        "construction": {"queues_by_id": {
+            "0": {"type": "planet", "owner": 0, "location": {"type": 2, "id": 3}},
+        }},
+    }
+    bundle = _bundle(
+        {"category": "districts", "id": "district_city",
+         "definition": {"key": "district_city", "resources": {"cost": {"minerals": 300}}}},
+        {"category": "buildings", "id": "building_capital",
+         "definition": {"key": "building_capital"}},
+    )
+    candidates, skipped = build_candidates(state, bundle)
+    districts = [item for item in candidates if item["kind"] == "queue_district"]
+    buildings = [item for item in candidates if item["kind"] == "queue_building"]
+    assert districts and districts[0]["colony_id"] == "0" and districts[0]["queue_id"] == "0"
+    assert {item["zone_id"] for item in buildings} == {"0", "1"}
+    assert "construction" not in skipped
+
+
+def test_shape_construction_keeps_enactable_reason_and_cost():
+    state = {
+        "planets": [{"id": "3", "name": "Earth", "colony": 0, "build_queue": 0,
+                     "zones_by_id": {"0": {"id": "0"}}}],
+        "construction": {"queues_by_id": {
+            "0": {"type": "planet", "owner": 0, "location": {"type": 2, "id": 3}},
+        }},
+    }
+    bundle = _bundle(
+        {"category": "districts", "id": "district_city",
+         "definition": {"key": "district_city", "resources": {"cost": {"minerals": 300}}}},
+        {"category": "buildings", "id": "building_capital",
+         "definition": {"key": "building_capital", "resources": {"cost": {"minerals": 400}}}},
+    )
+    results = [
+        {"kind": "queue_district", "planet_id": "3", "district": "district_city",
+         "allowed": True, "enactable": True, "known": True},
+        {"kind": "queue_building", "planet_id": "3", "zone_id": "0", "building": "building_capital",
+         "allowed": False, "enactable": False, "known": True, "reason": "trigger_no"},
+    ]
+    shaped = shape_availability(state, bundle, results, queried=True)
+    planet = shaped["construction"]["planets"][0]
+    assert planet["available_districts"][0] == {
+        "district_id": "district_city", "enactable": True, "cost": {"minerals": 300}}
+    building = planet["zones"][0]["available_buildings"][0]
+    assert building["building_id"] == "building_capital"
+    assert building["enactable"] is False and building["reason"] == "trigger_no"
+    observed = {"snapshot": "s", "state": {"date": "2200.01.01", "planets": state["planets"],
+                                           "availability": shaped}}
+    brief = apply_observation_view(observed, "brief")["state"]
+    assert brief["planets"][0]["available_districts"][0]["district_id"] == "district_city"
+    assert brief["planets"][0]["available_buildings"][0]["available_buildings"][0]["reason"] == "trigger_no"
