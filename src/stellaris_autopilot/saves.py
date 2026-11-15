@@ -15,6 +15,7 @@ from .decision_commands import observe_planet_modifiers
 from .species_rights_commands import observe_species_rights
 from .starbase_commands import observe_starbase_slots
 from .army_commands import observe_army_queues
+from .claim_commands import observe_claims
 
 
 class SaveError(ValueError):
@@ -940,6 +941,7 @@ def normalize_gamestate(root: PDXNode, path: Path, *, country_id: str | None = N
         'shipbuilding': observe_shipyards(root, country_id, fleets) if fleets_known else {},
         'space': observe_space(root, country_id),
         'control_state': control_state,
+        'claims': observe_claims(root, country_id) if country_id == '0' else {'known': False, 'by_system': {}},
         'army_queues': observe_army_queues(root, country_id) if country_id == '0' else {'known': False, 'by_id': {}},
         'starbase_slots': (observe_starbase_slots(root, list(starbases['by_id'])) if starbases.get('known') is True
                            else {'known': False, 'by_id': {}}),

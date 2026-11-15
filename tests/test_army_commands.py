@@ -144,3 +144,11 @@ def test_payload_is_typed_and_tokenized():
         "army_type": "defensive_army", "species_id": "2", "starbase_id": "4294967295",
         "colony_id": "0", "queue_id": "1"}
     assert extended_native.extended_payload(command, "a" * 32)["kind"] == "recruit_army"
+
+
+def test_army_to_dict_matches_what_the_native_worker_echoes():
+    from stellaris_autopilot.direct_mcp import _native_matches
+    command = resolve_army_command(_state(), army_request("recruit_army", True, planet_id="3",
+                                                         army_type="defensive_army", species_id="2"))
+    echoed = {**native_army_payload(command, "c" * 32), "status": "submitted"}
+    assert _native_matches(echoed, "c" * 32, command.kind, command.to_dict()) is True

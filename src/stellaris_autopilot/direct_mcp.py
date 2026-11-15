@@ -48,6 +48,7 @@ from .control_commands import control_request
 from .diplomacy_commands import PROPOSALS, ResolvedDiplomacyCommand, diplomacy_request, proposal_outcome
 from .starbase_commands import starbase_request
 from .army_commands import army_request, starbase_army_planets
+from .claim_commands import claim_request
 from .species_rights_commands import CATEGORIES as SPECIES_RIGHT_CATEGORIES, category_of, species_right_request
 from .decision_commands import (ResolvedDecisionCommand, decision_definition, decision_outcome, decision_request,
                                 list_planet_decisions as planet_decision_listing)
@@ -436,6 +437,9 @@ class DirectConnection:
 
     def army_command(self, kind: str, definition=None, **payload) -> dict:
         return self._extended(army_request(kind, definition, **payload))
+
+    def claim_command(self, kind: str, **payload) -> dict:
+        return self._extended(claim_request(kind, **payload))
 
     def _extended(self, request) -> dict:
         if self.native_bridge is None:
@@ -1390,6 +1394,17 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                         "planets": planets, "receipts": receipts}
         return {"status": "command_verified", "planets": planets, "receipts": receipts}
 
+    @server.tool(annotations=writing)
+    async def add_system_claim(system_id: str) -> dict:
+        """Add one claim on one system (galactic_object id) through the normal command, paid in influence.
+
+        Claims are the basis for war goals. The game's validator decides whether
+        the system can be claimed (owned by another empire, known) and the cost.
+        Our claims are read from observe_empire state.claims.by_system. Verified
+        as exactly one more claim on that system with only influence spent.
+        """
+        return await call_write(connection.claim_command, "add_system_claim", system_id=system_id)
+
     @server.tool(annotations=readonly)
     async def list_diplomacy() -> dict:
         """List our side of every known relation: contact, communications, hostility and border state.
@@ -1558,6 +1573,7 @@ def build_direct_server(config_path: Path, *, native_bridge: NativeResearchBridg
                                     "set_species_right": "Change one category of our primary species' rights with normal checks",
                                     "queue_starbase_module": "Queue one starbase module in a free slot with normal payment",
                                     "queue_starbase_building": "Queue one starbase building in a free slot with normal payment",
+                                    "add_system_claim": "Claim one system owned by another empire (paid in influence)",
                                     "recruit_army": "Recruit one army on an owned planet (or all planets of a starbase's system)",
                                     "set_fleet_stance": "Set one owned fleet's passive/aggressive/evasive stance normally",
                                     "move_queue_item": "Move one owned construction item one place up or down in its queue",

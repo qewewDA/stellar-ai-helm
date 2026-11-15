@@ -25,15 +25,17 @@ from .starbase_commands import (StarbaseRequest, ResolvedStarbaseCommand, resolv
                                 verify_starbase_command, native_starbase_payload)
 from .army_commands import (ArmyRequest, ResolvedArmyCommand, resolve_army_command, verify_army_command,
                             native_army_payload)
+from .claim_commands import (ClaimRequest, ResolvedClaimCommand, resolve_claim_command, verify_claim_command,
+                             native_claim_payload)
 
 
 REQUEST_TYPES = (ShipRequest, PlanetRequest, FleetRequest, ColonyShipRequest, CountryRequest, ControlRequest,
                  EventRequest, DiplomacyRequest, DecisionRequest, SpeciesRightRequest,
-                 StarbaseRequest, ArmyRequest)
+                 StarbaseRequest, ArmyRequest, ClaimRequest)
 RESOLVED_TYPES = (ShipConstruction, ResolvedPlanetCommand, FleetOperation, ColonyShipConstruction,
                   ResolvedCountryCommand, ResolvedControlCommand, ResolvedEventCommand, ResolvedDiplomacyCommand,
                   ResolvedDecisionCommand, ResolvedSpeciesRightCommand, ResolvedStarbaseCommand,
-                  ResolvedArmyCommand)
+                  ResolvedArmyCommand, ResolvedClaimCommand)
 
 
 def resolve_extended(state, request):
@@ -61,6 +63,8 @@ def resolve_extended(state, request):
         return resolve_starbase_command(state, request)
     if isinstance(request, ArmyRequest):
         return resolve_army_command(state, request)
+    if isinstance(request, ClaimRequest):
+        return resolve_claim_command(state, request)
     raise ValueError("Unsupported extended native request")
 
 
@@ -89,6 +93,8 @@ def verify_extended(before, after, command):
         return verify_starbase_command(before, after, command)
     if isinstance(command, ResolvedArmyCommand):
         return verify_army_command(before, after, command)
+    if isinstance(command, ResolvedClaimCommand):
+        return verify_claim_command(before, after, command)
     return False
 
 
@@ -125,4 +131,6 @@ def extended_payload(command, token):
         return native_starbase_payload(command, token)
     if isinstance(command, ResolvedArmyCommand):
         return native_army_payload(command, token)
+    if isinstance(command, ResolvedClaimCommand):
+        return native_claim_payload(command, token)
     raise ValueError("Unsupported resolved native command")
